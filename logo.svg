@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg width="512" height="512" viewBox="0 0 36 36" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="nexusGrad" x1="0" y1="0" x2="36" y2="36" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#A78BFA"/>
+      <stop offset="0.55" stop-color="#7C3AED"/>
+      <stop offset="1" stop-color="#4C1D95"/>
+    </linearGradient>
+    <linearGradient id="accentGrad" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#FBBF24"/>
+      <stop offset="1" stop-color="#F59E0B"/>
+    </linearGradient>
+    <radialGradient id="glowGrad" cx="50%" cy="50%" r="60%">
+      <stop offset="0" stop-color="#A78BFA" stop-opacity="0.4"/>
+      <stop offset="1" stop-color="#A78BFA" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+  <rect width="36" height="36" fill="url(#glowGrad)"/>
+  <rect width="36" height="36" rx="10" fill="url(#nexusGrad)"/>
+  <rect x="1" y="1" width="34" height="18" rx="9" fill="white" opacity="0.06"/>
+  <g stroke="white" stroke-width="1.6" stroke-linecap="round" opacity="0.9" fill="none">
+    <line x1="12" y1="12" x2="24" y2="18"/>
+    <line x1="24" y1="18" x2="12" y2="24"/>
+    <line x1="12" y1="12" x2="12" y2="24"/>
+  </g>
+  <circle cx="12" cy="12" r="2.8" fill="white"/>
+  <circle cx="24" cy="18" r="2.8" fill="white"/>
+  <circle cx="12" cy="24" r="2.8" fill="url(#accentGrad)"/>
+</svg>

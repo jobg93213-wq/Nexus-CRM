@@ -328,6 +328,20 @@
       .table-wrap td[colspan] { display: block; padding: 0; }
       .table-wrap td[colspan]::before { content: none; }
       .table-wrap td:last-child > div { width: 100%; }
+
+      /* Сворачивание доп. данных лида — по умолчанию скрыты, чтобы карточки не были "все рядом" */
+      .table-wrap tbody tr td.td-extra { display: none; }
+      .table-wrap tbody tr.expanded td.td-extra { display: flex; }
+      .lead-toggle-btn {
+        display: inline-flex; align-items: center; justify-content: center;
+        width: 22px; height: 22px; margin-right: 6px; flex-shrink: 0;
+        border: 1px solid var(--border); border-radius: 6px; background: var(--surface2);
+        color: var(--gray-light); font-size: 11px; cursor: pointer; transition: transform .15s;
+      }
+      .table-wrap tbody tr.expanded .lead-toggle-btn { transform: rotate(180deg); }
+    }
+    @media (min-width: 701px) {
+      .lead-toggle-btn { display: none; }
     }
 
     /* ══ KANBAN SWIPE (mobile) ══ */
@@ -433,7 +447,7 @@
         <div class="search-wrap"><svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><circle cx="11" cy="11" r="8" stroke-width="2"/><path d="M21 21l-4.35-4.35" stroke-width="2" stroke-linecap="round"/></svg><input type="text" class="form-input search-input" placeholder="Поиск…" oninput="filterLeads(this.value)" /></div>
         <button class="btn btn-primary" onclick="openModal('addLead')"><svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><line x1="12" y1="5" x2="12" y2="19" stroke-width="2" stroke-linecap="round"/><line x1="5" y1="12" x2="19" y2="12" stroke-width="2" stroke-linecap="round"/></svg>Добавить лид</button>
       </div>
-      <div class="card"><div class="table-wrap"><table><thead><tr><th>Имя</th><th>Контакты</th><th>Тип</th><th>Воронка</th><th>Менеджер</th><th>Статус</th><th>Действия</th></tr></thead><tbody id="leadsBody"></tbody></table></div></div>
+      <div class="card"><div class="table-wrap"><table><thead><tr><th>Имя</th><th>Контакты</th><th>Тип</th><th>Воронка</th><th>Менеджер</th><th>Источник</th><th>Статус</th><th>Действия</th></tr></thead><tbody id="leadsBody"></tbody></table></div></div>
     </div>
 
     <!-- KANBAN -->
@@ -515,13 +529,16 @@
             <div style="font-size:11px;color:var(--gray);margin-bottom:4px;">Вставьте перед <code style="background:var(--surface2);padding:1px 5px;border-radius:4px;color:var(--purple-bright);">&lt;/body&gt;</code>:</div>
             <div class="snippet-box">
               <button class="snippet-copy" onclick="copySnippet('widgetSnippet')">Копировать</button>
-              <pre id="widgetSnippet">&lt;script src="https://your-crm-domain.com/widget.js" data-token="nxcrm_UgCTeFkTijVuLD4PFVwx1b-mGYgf7hyemBUfW4BEHcQ" data-pipeline="1"&gt;&lt;/script&gt;</pre>
+              <pre id="widgetSnippet">&lt;script src="https://your-crm-domain.com/widget.js" data-token="nxcrm_UgCTeFkTijVuLD4PFVwx1b-mGYgf7hyemBUfW4BEHcQ" data-pipeline="1" data-source="Заказать звонок" data-label="Заказать звонок"&gt;&lt;/script&gt;
+&lt;script src="https://your-crm-domain.com/widget.js" data-token="nxcrm_UgCTeFkTijVuLD4PFVwx1b-mGYgf7hyemBUfW4BEHcQ" data-pipeline="1" data-source="Заказать просчет" data-label="Заказать просчет"&gt;&lt;/script&gt;</pre>
             </div>
           </div>
           <ol class="integ-steps">
             <li>Замените <code>your-crm-domain.com</code> на адрес вашего сервера</li>
             <li>Параметр <code>data-pipeline</code> — ID нужной воронки (1–8)</li>
-            <li>На сайте появится кнопка «Оставить заявку» с всплывающей формой</li>
+            <li>Параметр <code>data-source</code> — метка цели заявки (напр. «Заказать звонок», «Заказать просчет»); она попадёт в карточку лида, чтобы было видно, с какой именно кнопки сайта пришла заявка</li>
+            <li>Параметр <code>data-label</code> — текст самой кнопки на сайте (необязательно)</li>
+            <li>Можно добавить несколько таких строк с разными <code>data-source</code> — на сайте появится отдельная кнопка под каждую цель</li>
             <li>Заявки придут в CRM как новые лиды автоматически</li>
           </ol>
         </div>
@@ -545,12 +562,14 @@
     "name": "Имя клиента",
     "phone": "+79991234567",
     "pipeline_id": 1,
-    "client_type": "физ"
+    "client_type": "физ",
+    "source": "Заказать звонок"
   }'</pre>
             </div>
           </div>
           <ol class="integ-steps">
             <li>Поле <code>pipeline_id</code> — номер воронки куда попадёт заявка</li>
+            <li>Поле <code>source</code> — с какой кнопки/формы сайта пришла заявка (напр. «Заказать звонок», «Заказать просчет»); отобразится на карточке лида</li>
             <li>Swagger-документация доступна по: <code>/docs</code></li>
           </ol>
         </div>
@@ -563,10 +582,10 @@
             </div>
             <div><div class="integ-name">JavaScript / Fetch</div><div class="integ-desc">Отправка с формы на вашем сайте</div></div>
           </div>
-          <p style="font-size:12px;color:var(--gray-light);line-height:1.6;">Готовый JS-код для вашей существующей формы — скопируйте в обработчик submit.</p>
+          <p style="font-size:12px;color:var(--gray-light);line-height:1.6;">Готовый JS-код для вашей существующей формы — скопируйте в обработчик submit. Если на сайте несколько кнопок заявки (например «Заказать звонок» и «Заказать просчет»), укажите разное значение <code style="background:var(--surface2);padding:1px 5px;border-radius:4px;color:var(--purple-bright);">source</code> в обработчике каждой кнопки — тогда в CRM будет видно, с какой именно кнопки пришла заявка.</p>
           <div class="snippet-box" style="margin-top:12px;">
             <button class="snippet-copy" onclick="copySnippet('jsSnippet')">Копировать</button>
-            <pre id="jsSnippet">// В обработчике submit вашей формы:
+            <pre id="jsSnippet">// Например, в обработчике клика кнопки "Заказать звонок":
 fetch('http://YOUR-SERVER:8000/leads', {
   method: 'POST',
   headers: {
@@ -576,7 +595,8 @@ fetch('http://YOUR-SERVER:8000/leads', {
     name: form.name.value,
     phone: form.phone.value,
     pipeline_id: 1,
-    client_type: 'физ'
+    client_type: 'физ',
+    source: 'Заказать звонок'   // для кнопки "Заказать просчет" укажите 'Заказать просчет'
   })
 })
 .then(r => r.json())
@@ -653,12 +673,24 @@ fetch('http://YOUR-SERVER:8000/leads', {
     <div class="modal-body">
       <div class="form-section-title">Основное</div>
       <div class="form-row"><label class="form-label">Имя *</label><input type="text" class="form-input" id="newName" placeholder="Иван Иванов" /></div>
-      <div class="form-row"><label class="form-label">Телефон *</label><input type="text" class="form-input" id="newPhone" placeholder="+7 999 000 00 00" /></div>
+      <div class="form-row">
+        <label class="form-label">Телефон *</label>
+        <div style="display:flex;gap:8px;">
+          <select class="form-select" id="newPhoneCode" style="flex:0 0 92px;" onchange="onPhoneCodeChange()">
+            <option value="+7">+7</option>
+            <option value="+375">+375</option>
+            <option value="other">Другой</option>
+          </select>
+          <input type="tel" class="form-input" id="newPhoneNumber" placeholder="9991234567" style="flex:1;" />
+        </div>
+        <p style="font-size:11px;color:var(--gray);margin-top:6px;" id="newPhoneHint">Выберите код страны и введите номер без него</p>
+      </div>
       <div class="form-section-title">Продажа</div>
       <div class="form-row"><label class="form-label">Тип клиента</label><select class="form-select" id="newClientType" onchange="onNewPipelineTypeChange()"><option value="физ">Физическое лицо</option><option value="юр">Юридическое лицо</option></select></div>
       <div class="form-row"><label class="form-label">Воронка *</label><select class="form-select" id="newPipeline" onchange="onNewPipelineChange()"></select></div>
       <div class="form-row"><label class="form-label">Менеджер</label><select class="form-select" id="newManager"></select></div>
       <div class="form-row"><label class="form-label">Статус</label><select class="form-select" id="newStatus"></select></div>
+      <div class="form-row"><label class="form-label">Источник заявки</label><select class="form-select" id="newSource"><option value="">— Не указан —</option><option value="Заказать звонок">Заказать звонок</option><option value="Заказать просчет">Заказать просчет</option><option value="Вручную">Добавлен вручную</option></select></div>
       <div class="form-section-title">Соцсети</div>
       <div class="form-row"><label class="form-label">Telegram</label><div class="input-with-icon prefix-tg"><span class="soc-prefix"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M9.78 18.65l.28-4.23 7.68-6.92c.34-.31-.07-.46-.52-.19L7.74 13.3 3.64 12c-.88-.25-.89-.86.2-1.3l15.97-6.16c.73-.33 1.43.18 1.15 1.3l-2.72 12.81c-.19.91-.74 1.13-1.5.71L12.6 16.3l-1.99 1.93c-.23.23-.42.42-.83.42z"/></svg></span><input type="text" class="form-input" id="newTelegram" placeholder="@username" /></div></div>
       <div class="form-row"><label class="form-label">Viber</label><div class="input-with-icon prefix-vb"><span class="soc-prefix"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M20 2H4c-1.1 0-1.99.9-1.99 2L2 22l4-4h14c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2z"/></svg></span><input type="text" class="form-input" id="newViber" placeholder="+7 999 000 00 00" /></div></div>
@@ -839,19 +871,20 @@ async function loadLeads() {
 }
 function renderLeads(leads) {
   const b = document.getElementById('leadsBody');
-  if (!leads.length) { b.innerHTML = `<tr><td colspan="7"><div class="empty-state"><svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-width="1.5" d="M17 21v-2a4 4 0 00-4-4H5a4 4 0 00-4 4v2M9 11a4 4 0 100-8 4 4 0 000 8z"/></svg>Нет лидов</div></td></tr>`; return; }
+  if (!leads.length) { b.innerHTML = `<tr><td colspan="8"><div class="empty-state"><svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-width="1.5" d="M17 21v-2a4 4 0 00-4-4H5a4 4 0 00-4 4v2M9 11a4 4 0 100-8 4 4 0 000 8z"/></svg>Нет лидов</div></td></tr>`; return; }
   b.innerHTML = leads.map(l => {
     const socials = [l.telegram?`<a class="soc soc-tg" href="${tgUrl(l.telegram)}" target="_blank">${SVG_TG}</a>`:'', l.viber?`<a class="soc soc-vb" href="${viberUrl(l.viber)}" target="_blank">${SVG_VIBER}</a>`:'', l.vk?`<a class="soc soc-vk" href="${vkUrl(l.vk)}" target="_blank">${SVG_VK}</a>`:'' ].filter(Boolean).join('');
     const mgr = managerById(l.manager_id);
     const pl = allPipelines.find(p => p.pipeline_id === l.pipeline_id);
     return `<tr>
-      <td class="bold" data-label="Имя">${l.name}</td>
+      <td class="bold" data-label="Имя"><button class="lead-toggle-btn" onclick="this.closest('tr').classList.toggle('expanded')" aria-label="Развернуть/свернуть данные лида">▾</button>${l.name}</td>
       <td data-label="Контакты"><div class="contacts"><a class="phone-pill" href="tel:${l.phone}">${SVG_PHONE}${l.phone}</a>${socials}</div></td>
-      <td data-label="Тип"><span class="badge" style="background:rgba(109,40,217,.12);color:var(--purple-bright);">${l.client_type === 'юр' ? 'Юр.' : 'Физ.'}</span></td>
-      <td data-label="Воронка" style="font-size:12px;color:var(--gray-light);">${pl ? pl.name.split('—')[0].trim() : '#'+l.pipeline_id}</td>
-      <td data-label="Менеджер" style="font-size:12px;color:var(--gray-light);">${mgr ? mgr.name : '—'}</td>
+      <td class="td-extra" data-label="Тип"><span class="badge" style="background:rgba(109,40,217,.12);color:var(--purple-bright);">${l.client_type === 'юр' ? 'Юр.' : 'Физ.'}</span></td>
+      <td class="td-extra" data-label="Воронка" style="font-size:12px;color:var(--gray-light);">${pl ? pl.name.split('—')[0].trim() : '#'+l.pipeline_id}</td>
+      <td class="td-extra" data-label="Менеджер" style="font-size:12px;color:var(--gray-light);">${mgr ? mgr.name : '—'}</td>
+      <td class="td-extra" data-label="Источник" style="font-size:12px;color:var(--gray-light);">${l.source ? `<span class="badge" style="background:rgba(139,92,246,.12);color:var(--purple-bright);">${l.source}</span>` : '—'}</td>
       <td data-label="Статус"><span class="badge status-new"><span class="badge-dot"></span>${l.status}</span></td>
-      <td data-label="Действия">
+      <td class="td-extra" data-label="Действия">
         <div style="display:flex;gap:6px;flex-wrap:wrap;">
           <button class="btn btn-ghost btn-sm" onclick="openUpdateStatus('${l.phone}','${l.status}',${l.pipeline_id})">Статус</button>
           <button class="btn btn-danger btn-sm" onclick="openDeleteConfirm('${l.phone}','${l.name}')">Удалить</button>
@@ -870,6 +903,7 @@ async function populatePipelineSelects() {
   if (!allPipelines.length) { const d = await api('GET','/pipelines'); if (d) allPipelines = d; }
   if (!allManagers.length) { const d = await api('GET','/managers'); if (d) allManagers = d; }
   onNewPipelineTypeChange();
+  onPhoneCodeChange();
   const ms = document.getElementById('newManager');
   ms.innerHTML = '<option value="">— Не назначен —</option>' + allManagers.map(m => `<option value="${m.manager_id}">${m.name}</option>`).join('');
 }
@@ -886,21 +920,60 @@ function onNewPipelineChange() {
   const sel = document.getElementById('newStatus');
   if (pl) sel.innerHTML = pl.stages.map(s => `<option>${s}</option>`).join('');
 }
+// ── ТЕЛЕФОН: код страны + валидация длины ──
+// Номер может быть разной длины в зависимости от кода страны (+7 короче, +375 длиннее и т.д.),
+// поэтому проверяем не точную длину, а разумный диапазон.
+const PHONE_MIN_LEN = 11; // минимум символов вместе с "+" (короче — точно опечатка)
+const PHONE_MAX_LEN = 16; // максимум по стандарту E.164
+
+function onPhoneCodeChange() {
+  const code = document.getElementById('newPhoneCode').value;
+  const numInput = document.getElementById('newPhoneNumber');
+  const hint = document.getElementById('newPhoneHint');
+  if (code === 'other') {
+    numInput.placeholder = '+380991234567 (полный номер с кодом)';
+    hint.textContent = 'Введите полный номер вместе с международным кодом и знаком +';
+  } else {
+    numInput.placeholder = '9991234567';
+    hint.textContent = `Выберите код страны и введите номер без него (будет сохранён как ${code}...)`;
+  }
+}
+
+function buildPhoneFromInputs() {
+  const code = document.getElementById('newPhoneCode').value;
+  const raw = document.getElementById('newPhoneNumber').value.trim();
+  if (code === 'other') {
+    // Пользователь вводит номер целиком, включая код и "+"
+    const digits = raw.replace(/[^\d+]/g, '');
+    return digits.startsWith('+') ? digits : '+' + digits;
+  }
+  const digits = raw.replace(/\D/g, '');
+  return code + digits;
+}
+
 async function addLead() {
   const name = document.getElementById('newName').value.trim();
-  const phone = document.getElementById('newPhone').value.trim();
+  const phone = buildPhoneFromInputs();
   const pipeline_id = parseInt(document.getElementById('newPipeline').value);
   const manager_id = parseInt(document.getElementById('newManager').value) || null;
   const status = document.getElementById('newStatus').value;
   const client_type = document.getElementById('newClientType').value;
+  const source = document.getElementById('newSource').value || null;
   const telegram = document.getElementById('newTelegram').value.trim() || null;
   const viber = document.getElementById('newViber').value.trim() || null;
   const vk = document.getElementById('newVk').value.trim() || null;
-  if (!name || !phone) { toast('Заполните имя и телефон', 'error'); return; }
-  const r = await api('POST','/leads',{name,phone,status,pipeline_id,manager_id,client_type,telegram,viber,vk});
+  if (!name || phone.replace(/\D/g,'').length === 0) { toast('Заполните имя и телефон', 'error'); return; }
+  if (phone.length < PHONE_MIN_LEN || phone.length > PHONE_MAX_LEN) {
+    toast(`Проверьте номер телефона — похоже, он неполный или слишком длинный (сейчас ${phone.length} симв.)`, 'error');
+    return;
+  }
+  const r = await api('POST','/leads',{name,phone,status,pipeline_id,manager_id,client_type,telegram,viber,vk,source});
   if (r && !r.error) {
     toast('Лид добавлен'); closeModal('addLead');
-    ['newName','newPhone','newTelegram','newViber','newVk'].forEach(id => document.getElementById(id).value = '');
+    ['newName','newPhoneNumber','newTelegram','newViber','newVk'].forEach(id => document.getElementById(id).value = '');
+    document.getElementById('newPhoneCode').value = '+7';
+    document.getElementById('newSource').value = '';
+    onPhoneCodeChange();
     loadLeads(); loadDashboard();
   } else toast(r?.error || 'Ошибка', 'error');
 }
@@ -981,10 +1054,21 @@ async function loadKanban() {
   if (leads) allLeads = leads;
   if (pipelines) { allPipelines = pipelines; renderPipelineTabs(); }
 }
+function isMobileView() { return window.innerWidth <= 900; }
+function visiblePipelines() {
+  // На мобильной версии воронок слишком много для вкладок — оставляем только
+  // основные "Физические лица" и "Юридические лица" (id 1 и 2).
+  if (isMobileView()) {
+    const main = allPipelines.filter(p => p.pipeline_id === 1 || p.pipeline_id === 2);
+    return main.length ? main : allPipelines;
+  }
+  return allPipelines;
+}
 function renderPipelineTabs() {
   const tabs = document.getElementById('pipelineTabs');
-  tabs.innerHTML = allPipelines.map((p,i) => `<button class="tab ${i===0?'active':''}" onclick="selectPipeline(${p.pipeline_id},this)">${p.name.split('—')[0].trim()}</button>`).join('');
-  if (allPipelines.length) selectPipeline(allPipelines[0].pipeline_id, tabs.querySelector('.tab'));
+  const list = visiblePipelines();
+  tabs.innerHTML = list.map((p,i) => `<button class="tab ${i===0?'active':''}" onclick="selectPipeline(${p.pipeline_id},this)">${p.name.split('—')[0].trim()}</button>`).join('');
+  if (list.length) selectPipeline(list[0].pipeline_id, tabs.querySelector('.tab'));
 }
 function selectPipeline(pipelineId, el) {
   document.querySelectorAll('#pipelineTabs .tab').forEach(t => t.classList.remove('active'));
@@ -1003,7 +1087,7 @@ function selectPipeline(pipelineId, el) {
     const cards = leads.length ? leads.map(l => {
       const socials = [l.telegram?`<a class="soc soc-tg" href="${tgUrl(l.telegram)}" target="_blank">${SVG_TG}</a>`:'', l.viber?`<a class="soc soc-vb" href="${viberUrl(l.viber)}" target="_blank">${SVG_VIBER}</a>`:'', l.vk?`<a class="soc soc-vk" href="${vkUrl(l.vk)}" target="_blank">${SVG_VK}</a>`:'' ].filter(Boolean).join('');
       const mgr = managerById(l.manager_id);
-      return `<div class="k-card"><div class="k-card-name">${l.name}</div><div class="k-card-phone">${SVG_PHONE}<a href="tel:${l.phone}" style="color:var(--gray);text-decoration:none;">${l.phone}</a></div>${mgr?`<div class="k-card-phone">👤 ${mgr.name}</div>`:''}<div class="k-card-social">${socials}</div><button class="btn btn-ghost btn-sm" style="margin-top:8px;width:100%;" onclick="openUpdateStatus('${l.phone}','${l.status}',${l.pipeline_id})">Сменить статус</button></div>`;
+      return `<div class="k-card"><div class="k-card-name">${l.name}</div><div class="k-card-phone">${SVG_PHONE}<a href="tel:${l.phone}" style="color:var(--gray);text-decoration:none;">${l.phone}</a></div>${mgr?`<div class="k-card-phone">👤 ${mgr.name}</div>`:''}${l.source?`<div class="k-card-phone" style="color:var(--purple-bright);">🔗 ${l.source}</div>`:''}<div class="k-card-social">${socials}</div><button class="btn btn-ghost btn-sm" style="margin-top:8px;width:100%;" onclick="openUpdateStatus('${l.phone}','${l.status}',${l.pipeline_id})">Сменить статус</button></div>`;
     }).join('') : `<div class="k-empty">Пусто</div>`;
     return `<div class="k-col"><div class="k-col-head"><span>${s}</span><span class="k-count">${leads.length}</span></div><div class="k-cards">${cards}</div></div>`;
   }).join('');

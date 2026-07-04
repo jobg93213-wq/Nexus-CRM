@@ -61,6 +61,8 @@ class LeadDB(Base):
     pipeline_id = Column(Integer, ForeignKey("pipelines.pipeline_id"), nullable=False, default=1)
     manager_id = Column(Integer, ForeignKey("managers.manager_id"), nullable=True)
     client_type = Column(String, nullable=False, default="физ")  # "физ" или "юр"
+    # Источник заявки — с какой кнопки/формы на сайте пришла заявка (напр. "Заказать звонок", "Заказать просчет")
+    source = Column(String, nullable=True)
 
 
 class StageHistoryDB(Base):
@@ -144,6 +146,12 @@ def run_migrations():
                 print("[migrate] added column: client_type")
             except Exception as e:
                 print(f"[migrate] add client_type: {e}")
+        if "source" not in existing:
+            try:
+                conn.execute(text("ALTER TABLE leads ADD COLUMN source VARCHAR"))
+                print("[migrate] added column: source")
+            except Exception as e:
+                print(f"[migrate] add source: {e}")
 
 
 run_migrations()
@@ -280,6 +288,7 @@ class Lead(BaseModel):
     pipeline_id: int = 1
     manager_id: Optional[int] = None
     client_type: str = "физ"
+    source: Optional[str] = None  # с какой кнопки/формы сайта пришла заявка
 
 
 class Pipeline(BaseModel):
@@ -363,6 +372,7 @@ def post_zapr(lead: Lead, db: Session = Depends(get_db)):
         pipeline_id=lead.pipeline_id,
         manager_id=lead.manager_id,
         client_type=lead.client_type,
+        source=_clean(lead.source),
     )
     db.add(db_lead)
     db.commit()
@@ -595,6 +605,7 @@ class PublicLead(BaseModel):
     client_type: str = "физ"
     telegram: Optional[str] = None
     message: Optional[str] = None  # дополнительное поле из формы
+    source: Optional[str] = None  # с какой кнопки/формы на сайте пришла заявка (напр. "Заказать звонок")
 
 
 @app.post("/public/leads")
@@ -618,6 +629,10 @@ async def public_create_lead(request: Request, db: Session = Depends(get_db)):
     pipeline_id = int(body.get("pipeline_id", 1))
     client_type = body.get("client_type", "физ")
     telegram = body.get("telegram") or None
+    # Источник — с какой кнопки/формы сайта пришла заявка (напр. "Заказать звонок", "Заказать просчет").
+    # Поддерживаем оба названия поля на случай разных интеграций.
+    source = (body.get("source") or body.get("button") or None)
+    source = source.strip() if isinstance(source, str) else source
 
     if not name or not phone:
         return JSONResponse(status_code=422, content={"error": "name и phone обязательны"})
@@ -632,7 +647,7 @@ async def public_create_lead(request: Request, db: Session = Depends(get_db)):
     lead = LeadDB(
         name=name, phone=phone, status=status,
         pipeline_id=pipeline_id, client_type=client_type,
-        telegram=telegram,
+        telegram=telegram, source=source,
     )
     db.add(lead)
     db.commit()
@@ -645,60 +660,105 @@ from fastapi.responses import Response
 
 WIDGET_JS = r"""
 (function() {
-  var token = document.currentScript.getAttribute('data-token');
-  var pipelineId = parseInt(document.currentScript.getAttribute('data-pipeline') || '1');
-  var apiBase = document.currentScript.src.replace('/widget.js', '');
+  var scriptEl = document.currentScript;
+  var token = scriptEl.getAttribute('data-token');
+  var pipelineId = parseInt(scriptEl.getAttribute('data-pipeline') || '1');
+  // data-source — метка, с какой кнопки/цели пришла заявка (напр. "Заказать звонок", "Заказать просчет").
+  // Можно поставить несколько таких <script> с разными data-source на одной странице — у каждого будет своя кнопка.
+  var source = scriptEl.getAttribute('data-source') || null;
+  // data-label — текст на кнопке (по умолчанию "Оставить заявку")
+  var label = scriptEl.getAttribute('data-label') || 'Оставить заявку';
+  var apiBase = scriptEl.src.replace('/widget.js', '');
 
-  // Inject CSS
-  var style = document.createElement('style');
-  style.textContent = [
-    '#nxcrm-btn{position:fixed;bottom:24px;right:24px;z-index:9999;background:#6D28D9;color:#fff;border:none;border-radius:50px;padding:12px 22px;font-size:14px;font-weight:600;cursor:pointer;box-shadow:0 4px 20px rgba(109,40,217,.4);font-family:inherit;transition:all .2s;}',
-    '#nxcrm-btn:hover{background:#8B5CF6;transform:translateY(-2px);}',
-    '#nxcrm-overlay{display:none;position:fixed;inset:0;z-index:10000;background:rgba(0,0,0,.6);align-items:center;justify-content:center;padding:20px;}',
-    '#nxcrm-overlay.open{display:flex;}',
-    '#nxcrm-modal{background:#111118;border:1px solid #242430;border-radius:16px;width:100%;max-width:400px;padding:28px;font-family:inherit;}',
-    '#nxcrm-modal h3{color:#F9FAFB;font-size:18px;margin:0 0 6px;}',
-    '#nxcrm-modal p{color:#6B7280;font-size:13px;margin:0 0 20px;}',
-    '#nxcrm-modal input{width:100%;padding:10px 14px;background:#18181F;border:1px solid #242430;border-radius:8px;color:#F9FAFB;font-size:14px;margin-bottom:12px;box-sizing:border-box;font-family:inherit;outline:none;}',
-    '#nxcrm-modal input:focus{border-color:#6D28D9;}',
-    '#nxcrm-modal button{width:100%;padding:11px;background:#6D28D9;color:#fff;border:none;border-radius:8px;font-size:14px;font-weight:600;cursor:pointer;font-family:inherit;}',
-    '#nxcrm-modal button:hover{background:#8B5CF6;}',
-    '#nxcrm-close{float:right;cursor:pointer;color:#6B7280;font-size:20px;border:none;background:none;line-height:1;}',
-    '#nxcrm-ok{display:none;text-align:center;color:#10B981;font-size:15px;padding:10px 0;}'
-  ].join('');
-  document.head.appendChild(style);
+  // Уникальный id для этого экземпляра виджета — чтобы несколько кнопок на одной странице не конфликтовали
+  window.__nxcrmInstances = (window.__nxcrmInstances || 0);
+  var uid = 'nxcrm' + (window.__nxcrmInstances++);
+  var bottomOffset = 24 + (window.__nxcrmInstances - 1) * 64;
+
+  // Inject CSS (один раз на страницу)
+  if (!document.getElementById('nxcrm-style')) {
+    var style = document.createElement('style');
+    style.id = 'nxcrm-style';
+    style.textContent = [
+      '.nxcrm-btn{position:fixed;right:24px;z-index:9999;background:#6D28D9;color:#fff;border:none;border-radius:50px;padding:12px 22px;font-size:14px;font-weight:600;cursor:pointer;box-shadow:0 4px 20px rgba(109,40,217,.4);font-family:inherit;transition:all .2s;}',
+      '.nxcrm-btn:hover{background:#8B5CF6;transform:translateY(-2px);}',
+      '.nxcrm-overlay{display:none;position:fixed;inset:0;z-index:10000;background:rgba(0,0,0,.6);align-items:center;justify-content:center;padding:20px;}',
+      '.nxcrm-overlay.open{display:flex;}',
+      '.nxcrm-modal{background:#111118;border:1px solid #242430;border-radius:16px;width:100%;max-width:400px;padding:28px;font-family:inherit;}',
+      '.nxcrm-modal h3{color:#F9FAFB;font-size:18px;margin:0 0 6px;}',
+      '.nxcrm-modal p{color:#6B7280;font-size:13px;margin:0 0 20px;}',
+      '.nxcrm-modal input{width:100%;padding:10px 14px;background:#18181F;border:1px solid #242430;border-radius:8px;color:#F9FAFB;font-size:14px;margin-bottom:12px;box-sizing:border-box;font-family:inherit;outline:none;}',
+      '.nxcrm-modal input:focus{border-color:#6D28D9;}',
+      '.nxcrm-modal button.nxcrm-submit{width:100%;padding:11px;background:#6D28D9;color:#fff;border:none;border-radius:8px;font-size:14px;font-weight:600;cursor:pointer;font-family:inherit;}',
+      '.nxcrm-modal button.nxcrm-submit:hover{background:#8B5CF6;}',
+      '.nxcrm-close{float:right;cursor:pointer;color:#6B7280;font-size:20px;border:none;background:none;line-height:1;}',
+      '.nxcrm-ok{display:none;text-align:center;color:#10B981;font-size:15px;padding:10px 0;}'
+    ].join('');
+    document.head.appendChild(style);
+  }
 
   // Button
   var btn = document.createElement('button');
-  btn.id = 'nxcrm-btn';
-  btn.textContent = '📩 Оставить заявку';
+  btn.className = 'nxcrm-btn';
+  btn.id = uid + '-btn';
+  btn.style.bottom = bottomOffset + 'px';
+  btn.textContent = '📩 ' + label;
   document.body.appendChild(btn);
 
   // Modal
   var overlay = document.createElement('div');
-  overlay.id = 'nxcrm-overlay';
-  overlay.innerHTML = '<div id="nxcrm-modal"><button id="nxcrm-close" onclick="document.getElementById(\'nxcrm-overlay\').classList.remove(\'open\')">✕</button><h3>Оставить заявку</h3><p>Мы свяжемся с вами в ближайшее время</p><div id="nxcrm-ok">✅ Заявка принята! Мы скоро свяжемся.</div><input id="nxcrm-name" type="text" placeholder="Ваше имя *" /><input id="nxcrm-phone" type="tel" placeholder="Телефон *" /><input id="nxcrm-tg" type="text" placeholder="Telegram (необязательно)" /><button onclick="nxcrmSubmit()">Отправить заявку</button></div>';
+  overlay.className = 'nxcrm-overlay';
+  overlay.id = uid + '-overlay';
+  overlay.innerHTML =
+    '<div class="nxcrm-modal">' +
+      '<button class="nxcrm-close">✕</button>' +
+      '<h3>' + label + '</h3>' +
+      '<p>Мы свяжемся с вами в ближайшее время</p>' +
+      '<div class="nxcrm-ok">✅ Заявка принята! Мы скоро свяжемся.</div>' +
+      '<input class="nxcrm-name" type="text" placeholder="Ваше имя *" />' +
+      '<input class="nxcrm-phone" type="tel" placeholder="Телефон *" />' +
+      '<input class="nxcrm-tg" type="text" placeholder="Telegram (необязательно)" />' +
+      '<button type="button" class="nxcrm-submit">Отправить заявку</button>' +
+    '</div>';
   document.body.appendChild(overlay);
 
+  var closeBtn = overlay.querySelector('.nxcrm-close');
+  var nameInput = overlay.querySelector('.nxcrm-name');
+  var phoneInput = overlay.querySelector('.nxcrm-phone');
+  var tgInput = overlay.querySelector('.nxcrm-tg');
+  var submitBtn = overlay.querySelector('.nxcrm-submit');
+  var okBox = overlay.querySelector('.nxcrm-ok');
+
   btn.onclick = function() { overlay.classList.add('open'); };
+  closeBtn.onclick = function() { overlay.classList.remove('open'); };
   overlay.onclick = function(e) { if (e.target === overlay) overlay.classList.remove('open'); };
 
-  window.nxcrmSubmit = function() {
-    var name = document.getElementById('nxcrm-name').value.trim();
-    var phone = document.getElementById('nxcrm-phone').value.trim();
-    var tg = document.getElementById('nxcrm-tg').value.trim();
+  submitBtn.onclick = function() {
+    var name = nameInput.value.trim();
+    var phone = phoneInput.value.trim();
+    var tg = tgInput.value.trim();
     if (!name || !phone) { alert('Заполните имя и телефон'); return; }
     fetch(apiBase + '/public/leads', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'X-CRM-Token': token },
-      body: JSON.stringify({ name: name, phone: phone, telegram: tg || null, pipeline_id: pipelineId })
+      body: JSON.stringify({ name: name, phone: phone, telegram: tg || null, pipeline_id: pipelineId, source: source })
     }).then(function(r) { return r.json(); }).then(function(d) {
-      document.getElementById('nxcrm-ok').style.display = 'block';
-      document.getElementById('nxcrm-name').style.display = 'none';
-      document.getElementById('nxcrm-phone').style.display = 'none';
-      document.getElementById('nxcrm-tg').style.display = 'none';
-      document.querySelector('#nxcrm-modal button:last-child').style.display = 'none';
-      setTimeout(function() { overlay.classList.remove('open'); }, 2500);
+      okBox.style.display = 'block';
+      nameInput.style.display = 'none';
+      phoneInput.style.display = 'none';
+      tgInput.style.display = 'none';
+      submitBtn.style.display = 'none';
+      setTimeout(function() {
+        overlay.classList.remove('open');
+        setTimeout(function() {
+          okBox.style.display = 'none';
+          nameInput.style.display = '';
+          phoneInput.style.display = '';
+          tgInput.style.display = '';
+          submitBtn.style.display = '';
+          nameInput.value = ''; phoneInput.value = ''; tgInput.value = '';
+        }, 300);
+      }, 2500);
     }).catch(function() { alert('Ошибка отправки. Попробуйте позже.'); });
   };
 })();

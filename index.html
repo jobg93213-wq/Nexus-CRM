@@ -295,9 +295,39 @@
       .stats-grid { grid-template-columns: 1fr 1fr; gap: 10px; }
       .stat-value { font-size: 22px; }
       .search-input { width: 150px; }
-      .k-col { width: 200px; }
+      .k-col { width: min(78vw, 260px); }
       .toast-wrap { left: 16px; right: 16px; bottom: 16px; }
       .toast { max-width: 100%; }
+    }
+
+    /* ══ RESPONSIVE TABLES → CARDS (mobile) ══ */
+    @media (max-width: 700px) {
+      .table-wrap table, .table-wrap thead, .table-wrap tbody, .table-wrap th, .table-wrap td, .table-wrap tr { display: block; }
+      .table-wrap { overflow-x: visible; }
+      .table-wrap thead { position: absolute; left: -9999px; }
+      .table-wrap tbody tr {
+        border-bottom: 1px solid var(--border);
+        padding: 4px 0;
+      }
+      .table-wrap tbody tr:last-child { border-bottom: none; }
+      .table-wrap td {
+        display: flex; flex-direction: column; align-items: flex-start; gap: 3px;
+        padding: 9px 16px; border-bottom: none; width: auto;
+      }
+      .table-wrap td::before {
+        content: attr(data-label);
+        font-size: 10px; font-weight: 600; text-transform: uppercase;
+        letter-spacing: .06em; color: var(--gray);
+      }
+      .table-wrap td[colspan] { display: block; padding: 0; }
+      .table-wrap td[colspan]::before { content: none; }
+      .table-wrap td:last-child > div { width: 100%; }
+    }
+
+    /* ══ KANBAN SWIPE (mobile) ══ */
+    @media (max-width: 900px) {
+      .kanban { scroll-snap-type: x proximity; }
+      .k-col { scroll-snap-align: start; }
     }
   </style>
 </head>
@@ -828,9 +858,9 @@ async function loadDashboard() {
     const body = document.getElementById('dashLeadsBody');
     body.innerHTML = [...leads].slice(-8).reverse().map(l => `
       <tr>
-        <td class="bold">${l.name}</td>
-        <td><div class="contacts"><a class="phone-pill" href="tel:${l.phone}">${SVG_PHONE}${l.phone}</a>${l.telegram?`<a class="soc soc-tg" href="${tgUrl(l.telegram)}" target="_blank">${SVG_TG}</a>`:''}</div></td>
-        <td><span class="badge status-new"><span class="badge-dot"></span>${l.status}</span></td>
+        <td class="bold" data-label="Имя">${l.name}</td>
+        <td data-label="Контакты"><div class="contacts"><a class="phone-pill" href="tel:${l.phone}">${SVG_PHONE}${l.phone}</a>${l.telegram?`<a class="soc soc-tg" href="${tgUrl(l.telegram)}" target="_blank">${SVG_TG}</a>`:''}</div></td>
+        <td data-label="Статус"><span class="badge status-new"><span class="badge-dot"></span>${l.status}</span></td>
       </tr>`).join('');
   }
   if (tasks) document.getElementById('statTasks').textContent = tasks.filter(t => !t.is_completed).length;
@@ -850,13 +880,13 @@ function renderLeads(leads) {
     const mgr = managerById(l.manager_id);
     const pl = allPipelines.find(p => p.pipeline_id === l.pipeline_id);
     return `<tr>
-      <td class="bold">${l.name}</td>
-      <td><div class="contacts"><a class="phone-pill" href="tel:${l.phone}">${SVG_PHONE}${l.phone}</a>${socials}</div></td>
-      <td><span class="badge" style="background:rgba(109,40,217,.12);color:var(--purple-bright);">${l.client_type === 'юр' ? 'Юр.' : 'Физ.'}</span></td>
-      <td style="font-size:12px;color:var(--gray-light);">${pl ? pl.name.split('—')[0].trim() : '#'+l.pipeline_id}</td>
-      <td style="font-size:12px;color:var(--gray-light);">${mgr ? mgr.name : '—'}</td>
-      <td><span class="badge status-new"><span class="badge-dot"></span>${l.status}</span></td>
-      <td>
+      <td class="bold" data-label="Имя">${l.name}</td>
+      <td data-label="Контакты"><div class="contacts"><a class="phone-pill" href="tel:${l.phone}">${SVG_PHONE}${l.phone}</a>${socials}</div></td>
+      <td data-label="Тип"><span class="badge" style="background:rgba(109,40,217,.12);color:var(--purple-bright);">${l.client_type === 'юр' ? 'Юр.' : 'Физ.'}</span></td>
+      <td data-label="Воронка" style="font-size:12px;color:var(--gray-light);">${pl ? pl.name.split('—')[0].trim() : '#'+l.pipeline_id}</td>
+      <td data-label="Менеджер" style="font-size:12px;color:var(--gray-light);">${mgr ? mgr.name : '—'}</td>
+      <td data-label="Статус"><span class="badge status-new"><span class="badge-dot"></span>${l.status}</span></td>
+      <td data-label="Действия">
         <div style="display:flex;gap:6px;flex-wrap:wrap;">
           <button class="btn btn-ghost btn-sm" onclick="openUpdateStatus('${l.phone}','${l.status}',${l.pipeline_id})">Статус</button>
           <button class="btn btn-danger btn-sm" onclick="openDeleteConfirm('${l.phone}','${l.name}')">Удалить</button>
@@ -963,7 +993,7 @@ function renderManagers(managers) {
   if (!managers.length) { b.innerHTML = `<tr><td colspan="4"><div class="empty-state">Нет менеджеров</div></td></tr>`; return; }
   b.innerHTML = managers.map(m => {
     const count = allLeads.filter(l => l.manager_id === m.manager_id).length;
-    return `<tr><td style="color:var(--gray);">#${m.manager_id}</td><td class="bold">${m.name}</td><td style="font-size:12px;color:var(--gray);">${m.phone||''} ${m.email||''}</td><td>${count}</td></tr>`;
+    return `<tr><td data-label="ID" style="color:var(--gray);">#${m.manager_id}</td><td class="bold" data-label="Имя">${m.name}</td><td data-label="Контакты" style="font-size:12px;color:var(--gray);">${m.phone||''} ${m.email||''}</td><td data-label="Клиентов">${count}</td></tr>`;
   }).join('');
 }
 async function addManager() {
@@ -1082,7 +1112,7 @@ async function loadReasons() {
 function renderReasons(reasons) {
   const b = document.getElementById('reasonsBody');
   if (!reasons.length) { b.innerHTML = `<tr><td colspan="2"><div class="empty-state">Нет причин отказа</div></td></tr>`; return; }
-  b.innerHTML = reasons.map(r => `<tr><td style="color:var(--gray)">#${r.reason_id}</td><td class="bold">${r.title}</td></tr>`).join('');
+  b.innerHTML = reasons.map(r => `<tr><td data-label="ID" style="color:var(--gray)">#${r.reason_id}</td><td class="bold" data-label="Название">${r.title}</td></tr>`).join('');
 }
 async function addReason() {
   const reason_id = parseInt(document.getElementById('reasonId').value);

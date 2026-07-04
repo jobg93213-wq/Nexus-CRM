@@ -764,7 +764,10 @@ app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 # Главная страница CRM — отдаём index.html (а не JSON 404!)
 @app.get("/", include_in_schema=False)
 def serve_index():
-    return FileResponse(os.path.join(STATIC_DIR, "index.html"))
+    return FileResponse(
+        os.path.join(STATIC_DIR, "index.html"),
+        headers={"Cache-Control": "no-store, no-cache, must-revalidate, max-age=0"},
+    )
 
 # Favicon (чтобы не было 404 в консоли браузера)
 @app.get("/favicon.ico", include_in_schema=False)

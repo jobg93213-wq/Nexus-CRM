@@ -1,14 +1,18 @@
+import os
 from datetime import datetime
 from typing import Optional
-from fastapi import FastAPI, Depends
+from fastapi import FastAPI, Depends, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
+from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel
 from sqlalchemy import create_engine, Column, Integer, String, Boolean, ForeignKey, DateTime, text
 from sqlalchemy.orm import declarative_base, sessionmaker, Session
 
-DATABASE_URL = "sqlite:///./crm.db"
+DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///./crm.db")
 
-engine = create_engine(DATABASE_URL, connect_args={"check_same_thread": False})
+connect_args = {"check_same_thread": False} if DATABASE_URL.startswith("sqlite") else {}
+engine = create_engine(DATABASE_URL, connect_args=connect_args)
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 Base = declarative_base()
 
@@ -748,3 +752,32 @@ WIDGET_JS = r"""
 def serve_widget():
     """Возвращает встраиваемый JS-виджет для сайтов."""
     return Response(content=WIDGET_JS, media_type="application/javascript")
+
+
+# ─────────── STATIC FILES & INDEX ───────────
+
+STATIC_DIR = os.path.dirname(os.path.abspath(__file__))
+
+# Раздача логотипов, favicon и прочей статики по пути /static/<filename>
+app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
+
+# Главная страница CRM — отдаём index.html (а не JSON 404!)
+@app.get("/", include_in_schema=False)
+def serve_index():
+    return FileResponse(os.path.join(STATIC_DIR, "index.html"))
+
+# Favicon (чтобы не было 404 в консоли браузера)
+@app.get("/favicon.ico", include_in_schema=False)
+def serve_favicon():
+    favicon_path = os.path.join(STATIC_DIR, "favicon.png")
+    if os.path.exists(favicon_path):
+        return FileResponse(favicon_path, media_type="image/png")
+    return JSONResponse(status_code=404, content={"detail": "favicon not found"})
+
+
+# ─────────── ENTRYPOINT ───────────
+
+if __name__ == "__main__":
+    import uvicorn
+    port = int(os.getenv("PORT", 8000))
+    uvicorn.run("main:app", host="0.0.0.0", port=port, reload=False)

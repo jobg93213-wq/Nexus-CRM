@@ -2,10 +2,10 @@ meta:
   environment: python
   toolchain:
     name: pip
-    version: 3.11
+    version: '3.11'
 
 build:
-  requirements: nexus_crm/requirements.txt
+  requirementsPath: requirements.txt
 
 run:
-  command: uvicorn nexus_crm.main:app --host 0.0.0.0 --port 80
+  command: uvicorn main:app --host 0.0.0.0 --port 80

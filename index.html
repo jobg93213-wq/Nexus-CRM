@@ -503,7 +503,127 @@
           </ol>
         </div>
 
+        <!-- REST API -->
+        <div class="integ-card">
+          <div class="integ-card-head">
+            <div class="integ-icon" style="background:rgba(16,185,129,.15);">
+              <svg fill="none" stroke="#10B981" viewBox="0 0 24 24"><path stroke-width="1.8" stroke-linecap="round" d="M8 9l3 3-3 3m5 0h3M5 20h14a2 2 0 002-2V6a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"/></svg>
+            </div>
+            <div><div class="integ-name">REST API</div><div class="integ-desc">Прямые запросы из любого сервиса</div></div>
+          </div>
+          <p style="font-size:12px;color:var(--gray-light);line-height:1.6;">Отправляйте заявки с сайта или из любого сервиса напрямую через HTTP POST-запрос.</p>
+          <div style="margin-top:12px;">
+            <div style="font-size:11px;color:var(--gray);margin-bottom:4px;">Пример curl:</div>
+            <div class="snippet-box">
+              <button class="snippet-copy" onclick="copySnippet('curlSnippet')">Копировать</button>
+              <pre id="curlSnippet">curl -X POST http://localhost:8000/leads \
+  -H "Authorization: Basic ТОКЕН" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "Имя клиента",
+    "phone": "+79991234567",
+    "pipeline_id": 1,
+    "client_type": "физ"
+  }'</pre>
+            </div>
+          </div>
+          <ol class="integ-steps">
+            <li>Используйте Basic Auth: логин <code>developer</code>, пароль <code>123456CRM</code></li>
+            <li>Поле <code>pipeline_id</code> — номер воронки куда попадёт заявка</li>
+            <li>Swagger-документация доступна по: <code>/docs</code></li>
+          </ol>
+        </div>
 
+        <!-- JS Fetch snippet -->
+        <div class="integ-card">
+          <div class="integ-card-head">
+            <div class="integ-icon" style="background:rgba(251,191,36,.15);">
+              <svg fill="none" stroke="#FCD34D" viewBox="0 0 24 24"><path stroke-width="1.8" stroke-linecap="round" d="M10 20l4-16m4 4l4 4-4 4M6 16l-4-4 4-4"/></svg>
+            </div>
+            <div><div class="integ-name">JavaScript / Fetch</div><div class="integ-desc">Отправка с формы на вашем сайте</div></div>
+          </div>
+          <p style="font-size:12px;color:var(--gray-light);line-height:1.6;">Готовый JS-код для вашей существующей формы — скопируйте в обработчик submit.</p>
+          <div class="snippet-box" style="margin-top:12px;">
+            <button class="snippet-copy" onclick="copySnippet('jsSnippet')">Копировать</button>
+            <pre id="jsSnippet">// В обработчике submit вашей формы:
+const creds = btoa('developer:123456CRM');
+fetch('http://YOUR-SERVER:8000/leads', {
+  method: 'POST',
+  headers: {
+    'Content-Type': 'application/json',
+    'Authorization': 'Basic ' + creds
+  },
+  body: JSON.stringify({
+    name: form.name.value,
+    phone: form.phone.value,
+    pipeline_id: 1,
+    client_type: 'физ'
+  })
+})
+.then(r => r.json())
+.then(d => console.log('Лид создан:', d));</pre>
+          </div>
+        </div>
+
+        <!-- Telegram Bot -->
+        <div class="integ-card">
+          <div class="integ-card-head">
+            <div class="integ-icon" style="background:rgba(34,158,217,.15);">
+              <svg fill="none" stroke="#229ED9" viewBox="0 0 24 24"><path stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" d="M12 20l9-5-9-5-9 5 9 5zM12 4l9 5-9 5-9-5 9-5z"/></svg>
+            </div>
+            <div><div class="integ-name">Telegram-бот</div><div class="integ-desc">Заявки через Telegram</div></div>
+          </div>
+          <p style="font-size:12px;color:var(--gray-light);line-height:1.6;">Создайте Telegram-бота, который будет принимать заявки и автоматически добавлять их в CRM.</p>
+          <ol class="integ-steps">
+            <li>Создайте бота через <code>@BotFather</code> в Telegram</li>
+            <li>Получите токен бота и добавьте Webhook на ваш сервер</li>
+            <li>В Webhook-хендлере вызывайте <code>POST /leads</code> с данными клиента</li>
+            <li>Бот будет отвечать клиенту, а заявка — появляться в CRM</li>
+          </ol>
+        </div>
+
+        <!-- Webhook -->
+        <div class="integ-card">
+          <div class="integ-card-head">
+            <div class="integ-icon" style="background:rgba(168,85,247,.15);">
+              <svg fill="none" stroke="#C084FC" viewBox="0 0 24 24"><path stroke-width="1.8" stroke-linecap="round" d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1"/></svg>
+            </div>
+            <div><div class="integ-name">Webhook / n8n / Zapier</div><div class="integ-desc">Автоматизация без кода</div></div>
+          </div>
+          <p style="font-size:12px;color:var(--gray-light);line-height:1.6;">Подключите через n8n, Zapier или Make — без кода свяжите CRM с любой формой, Google Sheets, Notion и др.</p>
+          <ol class="integ-steps">
+            <li>В n8n создайте HTTP Request-ноду на <code>POST /leads</code></li>
+            <li>Укажите Basic Auth: <code>developer</code> / <code>123456CRM</code></li>
+            <li>Маппируйте поля: <code>name</code>, <code>phone</code>, <code>pipeline_id</code></li>
+            <li>Тригер — любой: форма, Google Sheet, email и т.д.</li>
+          </ol>
+        </div>
+
+        <!-- APK Info -->
+        <div class="integ-card">
+          <div class="integ-card-head">
+            <div class="integ-icon" style="background:rgba(16,185,129,.12);">
+              <svg fill="none" stroke="#10B981" viewBox="0 0 24 24"><path stroke-width="1.8" stroke-linecap="round" d="M12 18h.01M8 21h8a2 2 0 002-2V5a2 2 0 00-2-2H8a2 2 0 00-2 2v14a2 2 0 002 2z"/></svg>
+            </div>
+            <div><div class="integ-name">Android APK</div><div class="integ-desc">Собрать приложение за 5 минут</div></div>
+          </div>
+          <p style="font-size:12px;color:var(--gray-light);line-height:1.6;">Используйте <strong style="color:var(--white);">WebIntoApp.com</strong> или <strong style="color:var(--white);">AppsGeyser</strong> — бесплатно, без кода.</p>
+          <ol class="integ-steps">
+            <li>Зайдите на <code>webintoapp.com</code> или <code>appsgeyser.com</code></li>
+            <li>Вставьте URL вашего CRM-сервера (напр. <code>https://crm.example.com</code>)</li>
+            <li>Настройте иконку, название «Nexus CRM», цвет #6D28D9</li>
+            <li>Нажмите Build — через 2–3 минуты скачайте APK</li>
+            <li>Установите на Android через «Неизвестные источники»</li>
+          </ol>
+          <div style="margin-top:10px;padding:10px 12px;background:rgba(16,185,129,.08);border:1px solid rgba(16,185,129,.2);border-radius:8px;font-size:11px;color:#6ee7b7;">
+            💡 Для iOS используйте PWA: в Safari откройте сайт → «Добавить на экран» — работает как нативное приложение
+          </div>
+        </div>
+
+      </div>
+    </div>
+
+  </div><!-- /content -->
 </main>
 
 <!-- MODALS -->

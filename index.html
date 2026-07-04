@@ -173,12 +173,17 @@
     .kanban { display: flex; gap: 12px; overflow-x: auto; padding-bottom: 8px; min-height: 400px; }
     .kanban::-webkit-scrollbar { height: 5px; }
     .kanban::-webkit-scrollbar-thumb { background: var(--border); border-radius: 4px; }
-    .k-col { flex-shrink: 0; width: 240px; background: var(--surface); border: 1px solid var(--border); border-radius: 12px; overflow: hidden; display: flex; flex-direction: column; }
+    .k-col { flex-shrink: 0; width: 240px; background: var(--surface); border: 1px solid var(--border); border-radius: 12px; overflow: hidden; display: flex; flex-direction: column; transition: background-color .15s, border-color .15s; }
+    .k-col.drag-over { background: rgba(139,92,246,.08); border-color: var(--purple-bright); }
     .k-col-head { padding: 12px 14px; border-bottom: 1px solid var(--border); font-size: 12px; font-weight: 600; display: flex; align-items: center; justify-content: space-between; }
     .k-count { min-width: 18px; height: 18px; background: var(--surface2); border: 1px solid var(--border); border-radius: 20px; font-size: 10px; font-weight: 600; color: var(--gray-light); display: flex; align-items: center; justify-content: center; padding: 0 5px; }
-    .k-cards { padding: 10px; flex: 1; display: flex; flex-direction: column; gap: 8px; }
-    .k-card { background: var(--surface2); border: 1px solid var(--border); border-radius: 8px; padding: 12px; transition: border-color .15s; }
+    .k-cards { padding: 10px; flex: 1; display: flex; flex-direction: column; gap: 8px; min-height: 60px; }
+    .k-card { background: var(--surface2); border: 1px solid var(--border); border-radius: 8px; padding: 12px; transition: border-color .15s, opacity .15s; touch-action: none; cursor: grab; user-select: none; }
     .k-card:hover { border-color: rgba(109,40,217,.4); }
+    .k-card.dragging-source { opacity: .35; }
+    .k-card-ghost { position: fixed; z-index: 5000; pointer-events: none; box-shadow: 0 14px 34px rgba(0,0,0,.5); transform: rotate(-2deg) scale(1.03); border-color: var(--purple-bright); }
+    body.kanban-dragging { cursor: grabbing; user-select: none; }
+    body.kanban-dragging .k-card:not(.dragging-source):not(.k-card-ghost) { cursor: grabbing; }
     .k-card-name { font-size: 13px; font-weight: 600; margin-bottom: 6px; }
     .k-card-phone { font-size: 11px; color: var(--gray); margin-bottom: 8px; display: flex; align-items: center; gap: 5px; }
     .k-card-phone svg { width: 11px; height: 11px; color: var(--purple-bright); }
@@ -690,7 +695,6 @@ fetch('http://YOUR-SERVER:8000/leads', {
       <div class="form-row"><label class="form-label">Воронка *</label><select class="form-select" id="newPipeline" onchange="onNewPipelineChange()"></select></div>
       <div class="form-row"><label class="form-label">Менеджер</label><select class="form-select" id="newManager"></select></div>
       <div class="form-row"><label class="form-label">Статус</label><select class="form-select" id="newStatus"></select></div>
-      <div class="form-row"><label class="form-label">Источник заявки</label><select class="form-select" id="newSource"><option value="">— Не указан —</option><option value="Заказать звонок">Заказать звонок</option><option value="Заказать просчет">Заказать просчет</option><option value="Вручную">Добавлен вручную</option></select></div>
       <div class="form-section-title">Соцсети</div>
       <div class="form-row"><label class="form-label">Telegram</label><div class="input-with-icon prefix-tg"><span class="soc-prefix"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M9.78 18.65l.28-4.23 7.68-6.92c.34-.31-.07-.46-.52-.19L7.74 13.3 3.64 12c-.88-.25-.89-.86.2-1.3l15.97-6.16c.73-.33 1.43.18 1.15 1.3l-2.72 12.81c-.19.91-.74 1.13-1.5.71L12.6 16.3l-1.99 1.93c-.23.23-.42.42-.83.42z"/></svg></span><input type="text" class="form-input" id="newTelegram" placeholder="@username" /></div></div>
       <div class="form-row"><label class="form-label">Viber</label><div class="input-with-icon prefix-vb"><span class="soc-prefix"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M20 2H4c-1.1 0-1.99.9-1.99 2L2 22l4-4h14c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2z"/></svg></span><input type="text" class="form-input" id="newViber" placeholder="+7 999 000 00 00" /></div></div>
@@ -958,7 +962,6 @@ async function addLead() {
   const manager_id = parseInt(document.getElementById('newManager').value) || null;
   const status = document.getElementById('newStatus').value;
   const client_type = document.getElementById('newClientType').value;
-  const source = document.getElementById('newSource').value || null;
   const telegram = document.getElementById('newTelegram').value.trim() || null;
   const viber = document.getElementById('newViber').value.trim() || null;
   const vk = document.getElementById('newVk').value.trim() || null;
@@ -967,12 +970,11 @@ async function addLead() {
     toast(`Проверьте номер телефона — похоже, он неполный или слишком длинный (сейчас ${phone.length} симв.)`, 'error');
     return;
   }
-  const r = await api('POST','/leads',{name,phone,status,pipeline_id,manager_id,client_type,telegram,viber,vk,source});
+  const r = await api('POST','/leads',{name,phone,status,pipeline_id,manager_id,client_type,telegram,viber,vk});
   if (r && !r.error) {
     toast('Лид добавлен'); closeModal('addLead');
     ['newName','newPhoneNumber','newTelegram','newViber','newVk'].forEach(id => document.getElementById(id).value = '');
     document.getElementById('newPhoneCode').value = '+7';
-    document.getElementById('newSource').value = '';
     onPhoneCodeChange();
     loadLeads(); loadDashboard();
   } else toast(r?.error || 'Ошибка', 'error');
@@ -1087,10 +1089,112 @@ function selectPipeline(pipelineId, el) {
     const cards = leads.length ? leads.map(l => {
       const socials = [l.telegram?`<a class="soc soc-tg" href="${tgUrl(l.telegram)}" target="_blank">${SVG_TG}</a>`:'', l.viber?`<a class="soc soc-vb" href="${viberUrl(l.viber)}" target="_blank">${SVG_VIBER}</a>`:'', l.vk?`<a class="soc soc-vk" href="${vkUrl(l.vk)}" target="_blank">${SVG_VK}</a>`:'' ].filter(Boolean).join('');
       const mgr = managerById(l.manager_id);
-      return `<div class="k-card"><div class="k-card-name">${l.name}</div><div class="k-card-phone">${SVG_PHONE}<a href="tel:${l.phone}" style="color:var(--gray);text-decoration:none;">${l.phone}</a></div>${mgr?`<div class="k-card-phone">👤 ${mgr.name}</div>`:''}${l.source?`<div class="k-card-phone" style="color:var(--purple-bright);">🔗 ${l.source}</div>`:''}<div class="k-card-social">${socials}</div><button class="btn btn-ghost btn-sm" style="margin-top:8px;width:100%;" onclick="openUpdateStatus('${l.phone}','${l.status}',${l.pipeline_id})">Сменить статус</button></div>`;
+      return `<div class="k-card" data-phone="${l.phone}" data-status="${escapeHtml(l.status)}" data-pipeline="${l.pipeline_id}"><div class="k-card-name">${l.name}</div><div class="k-card-phone">${SVG_PHONE}<a href="tel:${l.phone}" style="color:var(--gray);text-decoration:none;">${l.phone}</a></div>${mgr?`<div class="k-card-phone">👤 ${mgr.name}</div>`:''}${l.source?`<div class="k-card-phone" style="color:var(--purple-bright);">🔗 ${l.source}</div>`:''}<div class="k-card-social">${socials}</div><button class="btn btn-ghost btn-sm" style="margin-top:8px;width:100%;" onclick="openUpdateStatus('${l.phone}','${l.status}',${l.pipeline_id})">Сменить статус</button></div>`;
     }).join('') : `<div class="k-empty">Пусто</div>`;
-    return `<div class="k-col"><div class="k-col-head"><span>${s}</span><span class="k-count">${leads.length}</span></div><div class="k-cards">${cards}</div></div>`;
+    return `<div class="k-col" data-stage="${escapeHtml(s)}"><div class="k-col-head"><span>${s}</span><span class="k-count">${leads.length}</span></div><div class="k-cards">${cards}</div></div>`;
   }).join('');
+  initKanbanDnD();
+}
+function escapeHtml(s) { return String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+
+// ── KANBAN: перетаскивание карточек пальцем/мышью между колонками ──
+let _dragState = null;
+function initKanbanDnD() {
+  const board = document.getElementById('kanbanBoard');
+  if (!board || board._dndInit) return;
+  board._dndInit = true;
+  board.addEventListener('pointerdown', onKanbanPointerDown);
+}
+function onKanbanPointerDown(e) {
+  if (e.pointerType === 'mouse' && e.button !== 0) return;
+  if (e.target.closest('a,button')) return; // не перехватываем тапы по ссылкам/кнопкам внутри карточки
+  const card = e.target.closest('.k-card');
+  if (!card) return;
+  _dragState = {
+    card,
+    startX: e.clientX, startY: e.clientY,
+    phone: card.dataset.phone, status: card.dataset.status, pipelineId: parseInt(card.dataset.pipeline),
+    dragging: false, ghost: null, currentCol: null,
+    rect: card.getBoundingClientRect(), offsetX: 0, offsetY: 0
+  };
+  document.addEventListener('pointermove', onKanbanPointerMove);
+  document.addEventListener('pointerup', onKanbanPointerUp, { once: true });
+  document.addEventListener('pointercancel', onKanbanPointerUp, { once: true });
+}
+function onKanbanPointerMove(e) {
+  const st = _dragState;
+  if (!st) return;
+  const dx = e.clientX - st.startX, dy = e.clientY - st.startY;
+  if (!st.dragging) {
+    if (Math.abs(dx) < 8 && Math.abs(dy) < 8) return;
+    startKanbanDrag(e);
+  }
+  e.preventDefault();
+  if (st.ghost) {
+    st.ghost.style.left = (e.clientX - st.offsetX) + 'px';
+    st.ghost.style.top = (e.clientY - st.offsetY) + 'px';
+  }
+  highlightColumnUnder(e.clientX, e.clientY);
+  autoScrollKanban(e.clientX);
+}
+function startKanbanDrag(e) {
+  const st = _dragState;
+  st.dragging = true;
+  st.offsetX = st.startX - st.rect.left;
+  st.offsetY = st.startY - st.rect.top;
+  const ghost = st.card.cloneNode(true);
+  ghost.className = 'k-card k-card-ghost';
+  ghost.style.width = st.rect.width + 'px';
+  ghost.style.left = (e.clientX - st.offsetX) + 'px';
+  ghost.style.top = (e.clientY - st.offsetY) + 'px';
+  document.body.appendChild(ghost);
+  st.ghost = ghost;
+  st.card.classList.add('dragging-source');
+  document.body.classList.add('kanban-dragging');
+}
+function highlightColumnUnder(x, y) {
+  const st = _dragState;
+  if (!st || !st.ghost) return;
+  st.ghost.style.display = 'none';
+  const el = document.elementFromPoint(x, y);
+  st.ghost.style.display = '';
+  const col = el ? el.closest('.k-col') : null;
+  if (col !== st.currentCol) {
+    if (st.currentCol) st.currentCol.classList.remove('drag-over');
+    if (col) col.classList.add('drag-over');
+    st.currentCol = col;
+  }
+}
+function autoScrollKanban(x) {
+  const board = document.getElementById('kanbanBoard');
+  const rect = board.getBoundingClientRect();
+  const edge = 56;
+  if (x - rect.left < edge) board.scrollLeft -= 14;
+  else if (rect.right - x < edge) board.scrollLeft += 14;
+}
+async function onKanbanPointerUp() {
+  document.removeEventListener('pointermove', onKanbanPointerMove);
+  const st = _dragState;
+  _dragState = null;
+  if (!st) return;
+  if (!st.dragging) return; // обычный тап — ничего не перемещаем, клик по карточке сработает как обычно
+  document.body.classList.remove('kanban-dragging');
+  st.card.classList.remove('dragging-source');
+  if (st.ghost) st.ghost.remove();
+  if (st.currentCol) st.currentCol.classList.remove('drag-over');
+  const newStatus = st.currentCol ? st.currentCol.dataset.stage : null;
+  if (!newStatus || newStatus === st.status) return;
+  await moveLeadToStage(st.phone, newStatus, st.pipelineId, st.status);
+}
+async function moveLeadToStage(phone, newStatus, pipelineId, oldStatus) {
+  if (newStatus === 'Отказ') {
+    // для отказа нужно указать причину — открываем обычную форму со сменой статуса
+    openUpdateStatus(phone, oldStatus, pipelineId);
+    return;
+  }
+  const r = await api('PUT', `/leads/update-status?phone=${encodeURIComponent(phone)}&new_status=${encodeURIComponent(newStatus)}`);
+  if (r && !r.error) { toast('Лид перемещён: ' + newStatus); loadLeads(); loadKanban(); }
+  else { toast(r?.error || 'Не удалось переместить лид', 'error'); loadKanban(); }
 }
 
 // ── TASKS ──

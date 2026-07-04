@@ -355,19 +355,6 @@
 <!-- SIDEBAR OVERLAY -->
 <div class="sidebar-overlay" id="sidebarOverlay" onclick="closeSidebar()"></div>
 
-<!-- LOGIN -->
-<div id="loginScreen" style="position:fixed;inset:0;z-index:4000;background:var(--bg);display:none;align-items:center;justify-content:center;padding:20px;">
-  <div class="modal" style="max-width:360px;">
-    <div class="modal-head"><div class="modal-title">Вход в Nexus CRM</div></div>
-    <div class="modal-body">
-      <div class="form-row"><label class="form-label">Логин</label><input type="text" class="form-input" id="loginUser" placeholder="developer" autocomplete="username" /></div>
-      <div class="form-row" style="margin-bottom:6px;"><label class="form-label">Пароль</label><input type="password" class="form-input" id="loginPass" placeholder="••••••••" autocomplete="current-password" onkeydown="if(event.key==='Enter') doLogin();" /></div>
-      <div id="loginError" style="display:none;color:var(--red);font-size:12px;margin-top:4px;">Неверный логин или пароль</div>
-    </div>
-    <div class="modal-foot"><button class="btn btn-primary" style="width:100%;justify-content:center;" onclick="doLogin()">Войти</button></div>
-  </div>
-</div>
-
 <!-- SIDEBAR -->
 <aside class="sidebar" id="sidebar">
   <div class="logo">
@@ -408,7 +395,7 @@
   </nav>
   <div class="sidebar-footer" style="display:flex;align-items:center;justify-content:space-between;gap:8px;">
     <span>API: <span style="color:var(--purple-bright);font-weight:600;">nexus-crm-production-a018.up.railway.app</span></span>
-    <button class="btn btn-ghost btn-sm" onclick="logout()" title="Выйти" style="padding:4px 8px;">⏻</button>
+    
   </div>
 </aside>
 
@@ -553,7 +540,6 @@
             <div class="snippet-box">
               <button class="snippet-copy" onclick="copySnippet('curlSnippet')">Копировать</button>
               <pre id="curlSnippet">curl -X POST http://localhost:8000/leads \
-  -H "Authorization: Basic ТОКЕН" \
   -H "Content-Type: application/json" \
   -d '{
     "name": "Имя клиента",
@@ -564,7 +550,6 @@
             </div>
           </div>
           <ol class="integ-steps">
-            <li>Используйте Basic Auth: логин <code>developer</code>, пароль <code>123456CRM</code></li>
             <li>Поле <code>pipeline_id</code> — номер воронки куда попадёт заявка</li>
             <li>Swagger-документация доступна по: <code>/docs</code></li>
           </ol>
@@ -582,12 +567,10 @@
           <div class="snippet-box" style="margin-top:12px;">
             <button class="snippet-copy" onclick="copySnippet('jsSnippet')">Копировать</button>
             <pre id="jsSnippet">// В обработчике submit вашей формы:
-const creds = btoa('developer:123456CRM');
 fetch('http://YOUR-SERVER:8000/leads', {
   method: 'POST',
   headers: {
-    'Content-Type': 'application/json',
-    'Authorization': 'Basic ' + creds
+    'Content-Type': 'application/json'
   },
   body: JSON.stringify({
     name: form.name.value,
@@ -629,7 +612,6 @@ fetch('http://YOUR-SERVER:8000/leads', {
           <p style="font-size:12px;color:var(--gray-light);line-height:1.6;">Подключите через n8n, Zapier или Make — без кода свяжите CRM с любой формой, Google Sheets, Notion и др.</p>
           <ol class="integ-steps">
             <li>В n8n создайте HTTP Request-ноду на <code>POST /leads</code></li>
-            <li>Укажите Basic Auth: <code>developer</code> / <code>123456CRM</code></li>
             <li>Маппируйте поля: <code>name</code>, <code>phone</code>, <code>pipeline_id</code></li>
             <li>Тригер — любой: форма, Google Sheet, email и т.д.</li>
           </ol>
@@ -772,34 +754,9 @@ function closeSidebar() {
   document.body.classList.remove('no-scroll');
 }
 
-// ── AUTH ──
-function getAuthToken() { return localStorage.getItem('nexus_token'); }
-function setAuthToken(t) { localStorage.setItem('nexus_token', t); }
-function clearAuthToken() { localStorage.removeItem('nexus_token'); }
-
-function showLoginScreen() {
-  const s = document.getElementById('loginScreen');
-  s.style.display = 'flex'; s.style.opacity = '0';
-  setTimeout(() => s.style.opacity = '1', 10);
-}
-function hideLoginScreen() { document.getElementById('loginScreen').style.display = 'none'; }
-
-async function doLogin() {
-  const u = document.getElementById('loginUser').value.trim();
-  const p = document.getElementById('loginPass').value;
-  const token = btoa(u + ':' + p);
-  try {
-    const r = await fetch(API + '/leads', { headers: { Authorization: 'Basic ' + token } });
-    if (r.status === 401) { document.getElementById('loginError').style.display = 'block'; return; }
-    setAuthToken(token); hideLoginScreen(); startApp();
-  } catch(e) { setAuthToken(token); hideLoginScreen(); startApp(); }
-}
-function logout() { clearAuthToken(); location.reload(); }
-
 // ── API ──
 async function api(method, path, body) {
-  const token = getAuthToken();
-  const opts = { method, headers: { Authorization: 'Basic ' + token } };
+  const opts = { method, headers: {} };
   if (body) { opts.headers['Content-Type'] = 'application/json'; opts.body = JSON.stringify(body); }
   try {
     const r = await fetch(API + path, opts);
@@ -1167,15 +1124,8 @@ function startApp() {
   api('GET','/leads').then(d => { if(d) allLeads = d; });
 }
 
-(async function initAuth() {
-  const token = getAuthToken();
-  if (!token) { showLoginScreen(); return; }
-  try {
-    const r = await fetch(API + '/leads', { headers: { Authorization: 'Basic ' + token } });
-    if (r.status === 401) { clearAuthToken(); showLoginScreen(); return; }
-    startApp();
-  } catch(e) { startApp(); }
-})();
+// Авторизация отключена — запускаем приложение сразу.
+startApp();
 </script>
 </body>
 </html>

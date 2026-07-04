@@ -1,4 +1,5 @@
 import os
+import secrets
 from datetime import datetime
 from typing import Optional
 from fastapi import FastAPI, Depends, Request
@@ -256,52 +257,7 @@ seed_data()
 
 app = FastAPI(title="CRM")
 
-# ─────────── БАЗОВАЯ АВТОРИЗАЦИЯ (HTTP Basic) ───────────
-import base64
-import secrets
-from starlette.requests import Request
-from starlette.responses import JSONResponse
-
-BASIC_AUTH_LOGIN = "developer"
-BASIC_AUTH_PASSWORD = "123456CRM"
-
-
-@app.middleware("http")
-async def basic_auth_middleware(request: Request, call_next):
-    # Preflight-запросы браузера пропускаем без проверки, иначе сломается CORS
-    if request.method == "OPTIONS":
-        return await call_next(request)
-
-    # Публичные роуты — без Basic Auth
-    if request.url.path in ("/public/leads", "/widget.js"):
-        return await call_next(request)
-
-    auth_header = request.headers.get("Authorization")
-    unauthorized = JSONResponse(
-        status_code=401,
-        content={"error": "Требуется авторизация"},
-        headers={"WWW-Authenticate": "Basic"},
-    )
-
-    if not auth_header or not auth_header.startswith("Basic "):
-        return unauthorized
-
-    try:
-        decoded = base64.b64decode(auth_header.split(" ", 1)[1]).decode("utf-8")
-        login, _, password = decoded.partition(":")
-    except Exception:
-        return unauthorized
-
-    valid_login = secrets.compare_digest(login, BASIC_AUTH_LOGIN)
-    valid_password = secrets.compare_digest(password, BASIC_AUTH_PASSWORD)
-    if not (valid_login and valid_password):
-        return unauthorized
-
-    return await call_next(request)
-
-
-# CORS должен быть добавлен ПОСЛЕ basic_auth_middleware, чтобы обернуть его снаружи —
-# тогда CORS-заголовки будут присутствовать даже в ответах 401.
+# CORS для кросс-доменных запросов (виджет / внешние интеграции).
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],

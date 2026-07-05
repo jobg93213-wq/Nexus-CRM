@@ -402,8 +402,8 @@ app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=True,
 @app.on_event("startup")
 def _auto_setup_telegram_webhook():
     """Если заданы TELEGRAM_BOT_TOKEN и PUBLIC_URL — автоматически подписываем бота на вебхук при старте."""
-    tg_token = os.getenv("8164490986:AAHZZKdkYr58TkLZS34shZpU7II5tWpxHe4", "")
-    public_url = os.getenv("https://nexus-crm-production-a018.up.railway.app/", "")
+    tg_token = os.getenv("TELEGRAM_BOT_TOKEN", "")
+    public_url = os.getenv("PUBLIC_URL", "")
     if not tg_token or not public_url:
         return
     try:

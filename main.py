@@ -1,5 +1,7 @@
 import os
+import httpx
 import secrets
+
 from datetime import datetime
 from typing import Optional
 from fastapi import FastAPI, Depends, Request
@@ -11,12 +13,10 @@ from sqlalchemy import create_engine, Column, Integer, String, Boolean, ForeignK
 from sqlalchemy.orm import declarative_base, sessionmaker, Session
 
 DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///./crm.db")
-
 connect_args = {"check_same_thread": False} if DATABASE_URL.startswith("sqlite") else {}
 engine = create_engine(DATABASE_URL, connect_args=connect_args)
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 Base = declarative_base()
-
 
 def get_db():
     db = SessionLocal()
@@ -25,84 +25,70 @@ def get_db():
     finally:
         db.close()
 
-
 # ─────────── MODELS ───────────
 
 class PipelineDB(Base):
     __tablename__ = "pipelines"
-    pipeline_id = Column(Integer, primary_key=True, index=True)
-    name = Column(String, nullable=False)
-    client_type = Column(String, nullable=False, default="физ")  # "физ" или "юр"
-    description = Column(String, nullable=True)
-    # Стадии воронки хранятся строкой через "|", порядок важен
-    stages = Column(String, nullable=False)
-
+    pipeline_id  = Column(Integer, primary_key=True, index=True)
+    name         = Column(String, nullable=False)
+    client_type  = Column(String, nullable=False, default="физ")
+    description  = Column(String, nullable=True)
+    stages       = Column(String, nullable=False)
 
 class ManagerDB(Base):
     __tablename__ = "managers"
     manager_id = Column(Integer, primary_key=True, index=True)
-    name = Column(String, nullable=False)
-    phone = Column(String, nullable=True)
-    email = Column(String, nullable=True)
-
+    name       = Column(String, nullable=False)
+    phone      = Column(String, nullable=True)
+    email      = Column(String, nullable=True)
 
 class LeadDB(Base):
     __tablename__ = "leads"
-    id = Column(Integer, primary_key=True, index=True)
-    name = Column(String, nullable=False)
-    phone = Column(String, unique=True, index=True, nullable=False)
-    status = Column(String, default="Новый клиент")
+    id             = Column(Integer, primary_key=True, index=True)
+    name           = Column(String, nullable=False)
+    phone          = Column(String, unique=True, index=True, nullable=False)
+    status         = Column(String, default="Новый клиент")
     loss_reason_id = Column(Integer, ForeignKey("loss_reasons.reason_id"), nullable=True)
-    # Соцсети лида
-    telegram = Column(String, nullable=True)
-    viber = Column(String, nullable=True)
-    vk = Column(String, nullable=True)
-    # Воронка / менеджер / тип клиента
-    pipeline_id = Column(Integer, ForeignKey("pipelines.pipeline_id"), nullable=False, default=1)
-    manager_id = Column(Integer, ForeignKey("managers.manager_id"), nullable=True)
-    client_type = Column(String, nullable=False, default="физ")  # "физ" или "юр"
-    # Источник заявки — с какой кнопки/формы на сайте пришла заявка (напр. "Заказать звонок", "Заказать просчет")
-    source = Column(String, nullable=True)
-
+    telegram       = Column(String, nullable=True)
+    viber          = Column(String, nullable=True)
+    vk             = Column(String, nullable=True)
+    pipeline_id    = Column(Integer, ForeignKey("pipelines.pipeline_id"), nullable=False, default=1)
+    manager_id     = Column(Integer, ForeignKey("managers.manager_id"), nullable=True)
+    client_type    = Column(String, nullable=False, default="физ")
+    source         = Column(String, nullable=True)
 
 class StageHistoryDB(Base):
     __tablename__ = "stage_history"
-    id = Column(Integer, primary_key=True, index=True)
-    phone = Column(String, nullable=False)
+    id         = Column(Integer, primary_key=True, index=True)
+    phone      = Column(String, nullable=False)
     old_status = Column(String, nullable=False)
     new_status = Column(String, nullable=False)
     changed_at = Column(DateTime, default=datetime.utcnow, nullable=False)
 
-
 class LossReasonDB(Base):
     __tablename__ = "loss_reasons"
     reason_id = Column(Integer, primary_key=True, index=True)
-    title = Column(String, nullable=False)
-
+    title     = Column(String, nullable=False)
 
 class TaskDB(Base):
     __tablename__ = "tasks"
-    task_id = Column(Integer, primary_key=True, index=True)
-    phone = Column(String, ForeignKey("leads.phone"), nullable=False)
-    description = Column(String, nullable=False)
-    deadline = Column(Integer, nullable=False)
+    task_id      = Column(Integer, primary_key=True, index=True)
+    phone        = Column(String, ForeignKey("leads.phone"), nullable=False)
+    description  = Column(String, nullable=False)
+    deadline     = Column(Integer, nullable=False)
     is_completed = Column(Boolean, default=False)
-
 
 # ─────────── DB INIT ───────────
 
 Base.metadata.create_all(bind=engine)
 
-
 def run_migrations():
-    """Идемпотентные миграции для уже существующей БД (crm.db)."""
     with engine.begin() as conn:
         try:
             existing = {row[1] for row in conn.execute(text("PRAGMA table_info(leads)"))}
         except Exception:
             existing = set()
 
-        # Удалить budget если остался от старой версии модели
         if "budget" in existing:
             try:
                 conn.execute(text("ALTER TABLE leads DROP COLUMN budget"))
@@ -110,7 +96,6 @@ def run_migrations():
             except Exception as e:
                 print(f"[migrate] drop budget: {e}")
 
-        # Удалить instagram если был (заменили на viber)
         if "instagram" in existing:
             try:
                 conn.execute(text("ALTER TABLE leads DROP COLUMN instagram"))
@@ -118,7 +103,6 @@ def run_migrations():
             except Exception as e:
                 print(f"[migrate] drop instagram: {e}")
 
-        # Добавить соцсети (на случай если БД совсем старая)
         for col in ("telegram", "viber", "vk"):
             if col not in existing:
                 try:
@@ -127,25 +111,27 @@ def run_migrations():
                 except Exception as e:
                     print(f"[migrate] add {col}: {e}")
 
-        # Добавить поля воронок/менеджеров/типа клиента
         if "pipeline_id" not in existing:
             try:
                 conn.execute(text("ALTER TABLE leads ADD COLUMN pipeline_id INTEGER DEFAULT 1"))
                 print("[migrate] added column: pipeline_id")
             except Exception as e:
                 print(f"[migrate] add pipeline_id: {e}")
+
         if "manager_id" not in existing:
             try:
                 conn.execute(text("ALTER TABLE leads ADD COLUMN manager_id INTEGER"))
                 print("[migrate] added column: manager_id")
             except Exception as e:
                 print(f"[migrate] add manager_id: {e}")
+
         if "client_type" not in existing:
             try:
                 conn.execute(text("ALTER TABLE leads ADD COLUMN client_type VARCHAR DEFAULT 'физ'"))
                 print("[migrate] added column: client_type")
             except Exception as e:
                 print(f"[migrate] add client_type: {e}")
+
         if "source" not in existing:
             try:
                 conn.execute(text("ALTER TABLE leads ADD COLUMN source VARCHAR"))
@@ -153,87 +139,49 @@ def run_migrations():
             except Exception as e:
                 print(f"[migrate] add source: {e}")
 
-
 run_migrations()
 
+# ─────────── СИД ───────────
 
-# ─────────── СИД: ВОРОНКИ, МЕНЕДЖЕРЫ, ДЕМО-ЛИД (тематика: клининг) ───────────
-
-# Все стадии каждой воронки прописаны через "|", порядок = порядок движения сделки по воронке.
 DEFAULT_PIPELINES = [
-    dict(
-        pipeline_id=1,
-        name="Физические лица — уборка квартир/домов",
-        client_type="физ",
-        description="Разовая и регулярная уборка жилья для частных клиентов",
-        stages="Новая заявка|Уточнение деталей заказа|Расчет стоимости|Согласование даты и времени|"
-               "Бронирование подтверждено|Уборка выполнена|Оплата получена|Повторный заказ|Отказ",
-    ),
-    dict(
-        pipeline_id=2,
-        name="Юридические лица — клининг офисов",
-        client_type="юр",
-        description="B2B продажи клининга офисов и коммерческих помещений",
-        stages="Первый контакт|Квалификация заявки|Выезд на замер объекта|Коммерческое предложение отправлено|"
-               "Переговоры / согласование условий|Договор подписан|Первая уборка выполнена|Регулярный контракт|Отказ",
-    ),
-    dict(
-        pipeline_id=3,
-        name="Генеральная уборка",
-        client_type="физ",
-        description="Комплексная генеральная уборка квартир, домов, коттеджей",
-        stages="Заявка|Оценка объема работ|Расчет стоимости|Согласование даты|Уборка выполнена|Оплата получена|Отказ",
-    ),
-    dict(
-        pipeline_id=4,
-        name="Уборка после ремонта",
-        client_type="физ",
-        description="Клининг после строительных и ремонтных работ",
-        stages="Заявка|Осмотр объекта|Расчет стоимости|Согласование даты|Работы выполнены|Оплата получена|Отказ",
-    ),
-    dict(
-        pipeline_id=5,
-        name="Химчистка мебели и ковров",
-        client_type="физ",
-        description="Химчистка мягкой мебели, ковров, матрасов на выезде",
-        stages="Заявка|Уточнение изделий и загрязнений|Расчет стоимости|Выезд мастера|Химчистка выполнена|Оплата получена|Отказ",
-    ),
-    dict(
-        pipeline_id=6,
-        name="Мойка окон и фасадов",
-        client_type="юр",
-        description="Мойка окон, витражей и фасадов зданий, в т.ч. с альпинистами",
-        stages="Заявка|Замер объекта|Коммерческое предложение|Согласование условий|Работы выполнены|Оплата получена|Отказ",
-    ),
-    dict(
-        pipeline_id=7,
-        name="Абонементное обслуживание (регулярный клининг)",
-        client_type="юр",
-        description="Продажа регулярного обслуживания по подписке/абонементу",
-        stages="Заявка|Презентация условий абонемента|Пробная уборка|Согласование графика|Договор подписан|"
-               "Активный абонемент|Отказ",
-    ),
-    dict(
-        pipeline_id=8,
-        name="Клининг после потопа/пожара (аварийные работы)",
-        client_type="физ",
-        description="Срочный клининг после ЧП: затопление, пожар, форс-мажор",
-        stages="Экстренная заявка|Выезд специалиста|Оценка ущерба и объема работ|Расчет стоимости|"
-               "Работы выполнены|Оплата получена|Отказ",
-    ),
+    dict(pipeline_id=1, name="Физические лица — уборка квартир/домов", client_type="физ",
+         description="Разовая и регулярная уборка жилья для частных клиентов",
+         stages="Новая заявка|Уточнение деталей заказа|Расчет стоимости|Согласование даты и времени|"
+                "Бронирование подтверждено|Уборка выполнена|Оплата получена|Повторный заказ|Отказ"),
+    dict(pipeline_id=2, name="Юридические лица — клининг офисов", client_type="юр",
+         description="B2B продажи клининга офисов и коммерческих помещений",
+         stages="Первый контакт|Квалификация заявки|Выезд на замер объекта|Коммерческое предложение отправлено|"
+                "Переговоры / согласование условий|Договор подписан|Первая уборка выполнена|Регулярный контракт|Отказ"),
+    dict(pipeline_id=3, name="Генеральная уборка", client_type="физ",
+         description="Комплексная генеральная уборка квартир, домов, коттеджей",
+         stages="Заявка|Оценка объема работ|Расчет стоимости|Согласование даты|Уборка выполнена|Оплата получена|Отказ"),
+    dict(pipeline_id=4, name="Уборка после ремонта", client_type="физ",
+         description="Клининг после строительных и ремонтных работ",
+         stages="Заявка|Осмотр объекта|Расчет стоимости|Согласование даты|Работы выполнены|Оплата получена|Отказ"),
+    dict(pipeline_id=5, name="Химчистка мебели и ковров", client_type="физ",
+         description="Химчистка мягкой мебели, ковров, матрасов на выезде",
+         stages="Заявка|Уточнение изделий и загрязнений|Расчет стоимости|Выезд мастера|Химчистка выполнена|Оплата получена|Отказ"),
+    dict(pipeline_id=6, name="Мойка окон и фасадов", client_type="юр",
+         description="Мойка окон, витражей и фасадов зданий, в т.ч. с альпинистами",
+         stages="Заявка|Замер объекта|Коммерческое предложение|Согласование условий|Работы выполнены|Оплата получена|Отказ"),
+    dict(pipeline_id=7, name="Абонементное обслуживание (регулярный клининг)", client_type="юр",
+         description="Продажа регулярного обслуживания по подписке/абонементу",
+         stages="Заявка|Презентация условий абонемента|Пробная уборка|Согласование графика|Договор подписан|"
+                "Активный абонемент|Отказ"),
+    dict(pipeline_id=8, name="Клининг после потопа/пожара (аварийные работы)", client_type="физ",
+         description="Срочный клининг после ЧП: затопление, пожар, форс-мажор",
+         stages="Экстренная заявка|Выезд специалиста|Оценка ущерба и объема работ|Расчет стоимости|"
+                "Работы выполнены|Оплата получена|Отказ"),
 ]
-
 
 def seed_data():
     with SessionLocal() as db:
-        # Воронки
         if db.query(PipelineDB).count() == 0:
             for p in DEFAULT_PIPELINES:
                 db.add(PipelineDB(**p))
             db.commit()
             print("[seed] добавлены воронки продаж (8 шт.)")
 
-        # Менеджер по умолчанию
         manager = db.query(ManagerDB).filter(ManagerDB.manager_id == 1).first()
         if not manager:
             manager = ManagerDB(manager_id=1, name="Менеджер 1", phone=None, email=None)
@@ -241,31 +189,23 @@ def seed_data():
             db.commit()
             print("[seed] добавлен менеджер: Менеджер 1")
 
-        # Демо-клиент для воронки "Физические лица"
         demo_phone = "+70000000001"
         demo_lead = db.query(LeadDB).filter(LeadDB.phone == demo_phone).first()
         if not demo_lead:
             demo_lead = LeadDB(
-                name="Клиент 1",
-                phone=demo_phone,
-                status="Новая заявка",
-                pipeline_id=1,
-                manager_id=1,
-                client_type="физ",
+                name="Клиент 1", phone=demo_phone, status="Новая заявка",
+                pipeline_id=1, manager_id=1, client_type="физ",
             )
             db.add(demo_lead)
             db.commit()
-            print("[seed] добавлен демо-клиент: Клиент 1 (воронка «Физические лица»)")
-
+            print("[seed] добавлен демо-клиент: Клиент 1")
 
 seed_data()
-
 
 # ─────────── APP ───────────
 
 app = FastAPI(title="CRM")
 
-# CORS для кросс-доменных запросов (виджет / внешние интеграции).
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -274,56 +214,49 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-
 # ─────────── SCHEMAS ───────────
 
 class Lead(BaseModel):
-    name: str
-    phone: str
-    status: Optional[str] = None
+    name:           str
+    phone:          str
+    status:         Optional[str] = None
     loss_reason_id: Optional[int] = None
-    telegram: Optional[str] = None
-    viber: Optional[str] = None
-    vk: Optional[str] = None
-    pipeline_id: int = 1
-    manager_id: Optional[int] = None
-    client_type: str = "физ"
-    source: Optional[str] = None  # с какой кнопки/формы сайта пришла заявка
-
+    telegram:       Optional[str] = None
+    viber:          Optional[str] = None
+    vk:             Optional[str] = None
+    pipeline_id:    int = 1
+    manager_id:     Optional[int] = None
+    client_type:    str = "физ"
+    source:         Optional[str] = None
 
 class Pipeline(BaseModel):
     pipeline_id: int
-    name: str
+    name:        str
     client_type: str = "физ"
     description: Optional[str] = None
-    stages: str  # стадии через "|"
-
+    stages:      str
 
 class Manager(BaseModel):
     manager_id: int
-    name: str
-    phone: Optional[str] = None
-    email: Optional[str] = None
-
+    name:       str
+    phone:      Optional[str] = None
+    email:      Optional[str] = None
 
 class StageHistory(BaseModel):
-    phone: str
+    phone:      str
     old_status: str
     new_status: str
 
-
 class LossReason(BaseModel):
     reason_id: int
-    title: str
-
+    title:     str
 
 class Task(BaseModel):
-    task_id: int
-    phone: str
-    description: str
-    deadline: int
+    task_id:      int
+    phone:        str
+    description:  str
+    deadline:     int
     is_completed: bool = False
-
 
 ALLOW_STATUSES = [
     "Новый клиент", "В работе", "Выставить счет", "Просчитать заказ",
@@ -332,14 +265,39 @@ ALLOW_STATUSES = [
     "Отказ"
 ]
 
-
 def _clean(v):
-    """Пустые строки из формы -> NULL в БД."""
     if v is None:
         return None
     s = str(v).strip()
     return s or None
 
+# ─────────── FCM ───────────
+
+def send_fcm_push(name: str, phone: str):
+    """Отправить data-пуш на топик managers через Firebase Legacy API."""
+    fcm_key = os.getenv("FCM_SERVER_KEY", "")
+    if not fcm_key:
+        print("[FCM] FCM_SERVER_KEY не задан — пуш не отправлен")
+        return
+    try:
+        resp = httpx.post(
+            "https://fcm.googleapis.com/fcm/send",
+            headers={
+                "Authorization": f"key={fcm_key}",
+                "Content-Type": "application/json",
+            },
+            json={
+                "to": "/topics/managers",
+                "data": {
+                    "title": "Пришла новая заявка!",
+                    "body": f"{name} · {phone}",
+                },
+            },
+            timeout=5,
+        )
+        print(f"[FCM] статус={resp.status_code} ответ={resp.text}")
+    except Exception as e:
+        print(f"[FCM] ошибка отправки: {e}")
 
 # ─────────── ENDPOINTS ───────────
 
@@ -362,32 +320,20 @@ def post_zapr(lead: Lead, db: Session = Depends(get_db)):
     status = lead.status if (lead.status and lead.status in stages) else stages[0]
 
     db_lead = LeadDB(
-        name=lead.name,
-        phone=lead.phone,
-        status=status,
+        name=lead.name, phone=lead.phone, status=status,
         loss_reason_id=lead.loss_reason_id,
-        telegram=_clean(lead.telegram),
-        viber=_clean(lead.viber),
-        vk=_clean(lead.vk),
-        pipeline_id=lead.pipeline_id,
-        manager_id=lead.manager_id,
-        client_type=lead.client_type,
-        source=_clean(lead.source),
+        telegram=_clean(lead.telegram), viber=_clean(lead.viber), vk=_clean(lead.vk),
+        pipeline_id=lead.pipeline_id, manager_id=lead.manager_id,
+        client_type=lead.client_type, source=_clean(lead.source),
     )
     db.add(db_lead)
     db.commit()
     db.refresh(db_lead)
-    return {
-        "message": "Лид успешно добавлен",
-        "data": lead.model_dump()
-    }
-
+    return {"message": "Лид успешно добавлен", "data": lead.model_dump()}
 
 @app.get("/leads")
 def get_zapr(db: Session = Depends(get_db)):
-    leads = db.query(LeadDB).all()
-    return leads
-
+    return db.query(LeadDB).all()
 
 @app.put("/leads/update-status")
 def put_zapros(phone: str, new_status: str, loss_reason_id: Optional[int] = None, db: Session = Depends(get_db)):
@@ -409,22 +355,13 @@ def put_zapros(phone: str, new_status: str, loss_reason_id: Optional[int] = None
         if not reason:
             return {"error": f"Причина отказа с id {loss_reason_id} не найдена"}
 
-    if lead:
-        old_status = lead.status
-        lead.status = new_status
-        lead.loss_reason_id = loss_reason_id
-
-        history = StageHistoryDB(
-            phone=phone,
-            old_status=old_status,
-            new_status=new_status
-        )
-        db.add(history)
-        db.commit()
-        return {"message": "Статус успешно изменен"}
-
-    return {"error": "Клиент с таким номером не найден."}
-
+    old_status  = lead.status
+    lead.status = new_status
+    lead.loss_reason_id = loss_reason_id
+    history = StageHistoryDB(phone=phone, old_status=old_status, new_status=new_status)
+    db.add(history)
+    db.commit()
+    return {"message": "Статус успешно изменен"}
 
 @app.delete("/leads/delete")
 def delete_lead(phone: str, db: Session = Depends(get_db)):
@@ -435,12 +372,9 @@ def delete_lead(phone: str, db: Session = Depends(get_db)):
         return {"message": "Клиент удален"}
     return {"error": "Телефона нет в базе"}
 
-
 @app.get("/pipeline/history")
 def get_pipeline_history(db: Session = Depends(get_db)):
-    history = db.query(StageHistoryDB).all()
-    return history
-
+    return db.query(StageHistoryDB).all()
 
 @app.get("/analytics/pipeline-conversion")
 def form_realise(db: Session = Depends(get_db)):
@@ -463,36 +397,27 @@ def form_realise(db: Session = Depends(get_db)):
         "conversion_rate": round(conversion_rate, 2)
     }
 
-
 @app.get("/pipeline/history-by-phone")
 def get_history_by_phone(phone: str, db: Session = Depends(get_db)):
-    history = db.query(StageHistoryDB).filter(StageHistoryDB.phone == phone).all()
-    return history
-
+    return db.query(StageHistoryDB).filter(StageHistoryDB.phone == phone).all()
 
 @app.post("/tasks")
 def create_task(task: Task, db: Session = Depends(get_db)):
     lead = db.query(LeadDB).filter(LeadDB.phone == task.phone).first()
     if not lead:
         return {"error": "Нельзя создать задачу для лида которого нет"}
-
     db_task = TaskDB(
-        task_id=task.task_id,
-        phone=task.phone,
-        description=task.description,
-        deadline=task.deadline,
+        task_id=task.task_id, phone=task.phone,
+        description=task.description, deadline=task.deadline,
         is_completed=task.is_completed
     )
     db.add(db_task)
     db.commit()
     return {"message": "Задача успешно добавлена", "data": task.model_dump()}
 
-
 @app.get("/tasks/all-pending")
 def get_all_pending_tasks(db: Session = Depends(get_db)):
-    active_tasks = db.query(TaskDB).filter(TaskDB.is_completed == False).all()
-    return active_tasks
-
+    return db.query(TaskDB).filter(TaskDB.is_completed == False).all()
 
 @app.put("/tasks/complete")
 def put_one(task_id: int, db: Session = Depends(get_db)):
@@ -503,30 +428,24 @@ def put_one(task_id: int, db: Session = Depends(get_db)):
         return {"message": "Успех"}
     return {"error": "Задача с таким айди не найдена:("}
 
-
 @app.post('/loss-reasons')
 def post_loss_reason(loss: LossReason, db: Session = Depends(get_db)):
     existing_reason = db.query(LossReasonDB).filter(LossReasonDB.reason_id == loss.reason_id).first()
     if existing_reason:
         return {"error": "Причина отказа с таким id уже существует"}
-
     db_loss = LossReasonDB(reason_id=loss.reason_id, title=loss.title)
     db.add(db_loss)
     db.commit()
     return {"message": "Причина отказа успешно добавлена", "data": loss.model_dump()}
 
-
 @app.get('/loss-reasons')
 def get_loss_reasons(db: Session = Depends(get_db)):
-    reasons = db.query(LossReasonDB).all()
-    return reasons
+    return db.query(LossReasonDB).all()
 
-
-# ─────────── ВОРОНКИ (PIPELINES) ───────────
+# ─────────── ВОРОНКИ ───────────
 
 @app.get('/pipelines')
 def get_pipelines(db: Session = Depends(get_db)):
-    pipelines = db.query(PipelineDB).all()
     return [
         {
             "pipeline_id": p.pipeline_id,
@@ -535,27 +454,22 @@ def get_pipelines(db: Session = Depends(get_db)):
             "description": p.description,
             "stages": p.stages.split("|"),
         }
-        for p in pipelines
+        for p in db.query(PipelineDB).all()
     ]
-
 
 @app.post('/pipelines')
 def post_pipeline(pipeline: Pipeline, db: Session = Depends(get_db)):
     existing = db.query(PipelineDB).filter(PipelineDB.pipeline_id == pipeline.pipeline_id).first()
     if existing:
         return {"error": "Воронка с таким id уже существует"}
-
     db_pipeline = PipelineDB(
-        pipeline_id=pipeline.pipeline_id,
-        name=pipeline.name,
-        client_type=pipeline.client_type,
-        description=pipeline.description,
+        pipeline_id=pipeline.pipeline_id, name=pipeline.name,
+        client_type=pipeline.client_type, description=pipeline.description,
         stages=pipeline.stages,
     )
     db.add(db_pipeline)
     db.commit()
     return {"message": "Воронка успешно добавлена", "data": pipeline.model_dump()}
-
 
 # ─────────── МЕНЕДЖЕРЫ ───────────
 
@@ -563,23 +477,18 @@ def post_pipeline(pipeline: Pipeline, db: Session = Depends(get_db)):
 def get_managers(db: Session = Depends(get_db)):
     return db.query(ManagerDB).all()
 
-
 @app.post('/managers')
 def post_manager(manager: Manager, db: Session = Depends(get_db)):
     existing = db.query(ManagerDB).filter(ManagerDB.manager_id == manager.manager_id).first()
     if existing:
         return {"error": "Менеджер с таким id уже существует"}
-
     db_manager = ManagerDB(
-        manager_id=manager.manager_id,
-        name=manager.name,
-        phone=_clean(manager.phone),
-        email=_clean(manager.email),
+        manager_id=manager.manager_id, name=manager.name,
+        phone=_clean(manager.phone), email=_clean(manager.email),
     )
     db.add(db_manager)
     db.commit()
     return {"message": "Менеджер успешно добавлен", "data": manager.model_dump()}
-
 
 @app.put('/leads/assign-manager')
 def assign_manager(phone: str, manager_id: Optional[int] = None, db: Session = Depends(get_db)):
@@ -594,27 +503,21 @@ def assign_manager(phone: str, manager_id: Optional[int] = None, db: Session = D
     db.commit()
     return {"message": "Менеджер назначен"}
 
-# ─────────── ПУБЛИЧНЫЙ ЭНДПОИНТ ДЛЯ ВИДЖЕТА / САЙТА ───────────
+# ─────────── ПУБЛИЧНЫЙ ЭНДПОИНТ ───────────
 
 WIDGET_TOKEN = "nxcrm_UgCTeFkTijVuLD4PFVwx1b-mGYgf7hyemBUfW4BEHcQ"
 
 class PublicLead(BaseModel):
-    name: str
-    phone: str
+    name:        str
+    phone:       str
     pipeline_id: int = 1
     client_type: str = "физ"
-    telegram: Optional[str] = None
-    message: Optional[str] = None  # дополнительное поле из формы
-    source: Optional[str] = None  # с какой кнопки/формы на сайте пришла заявка (напр. "Заказать звонок")
-
+    telegram:    Optional[str] = None
+    message:     Optional[str] = None
+    source:      Optional[str] = None
 
 @app.post("/public/leads")
 async def public_create_lead(request: Request, db: Session = Depends(get_db)):
-    """
-    Публичный эндпоинт — принимает заявки с сайта по API-токену.
-    Авторизация через заголовок: X-CRM-Token: nxcrm_...
-    Не требует Basic Auth.
-    """
     token = request.headers.get("X-CRM-Token", "")
     if not secrets.compare_digest(token, WIDGET_TOKEN):
         return JSONResponse(status_code=403, content={"error": "Неверный токен"})
@@ -624,15 +527,13 @@ async def public_create_lead(request: Request, db: Session = Depends(get_db)):
     except Exception:
         return JSONResponse(status_code=422, content={"error": "Неверный JSON"})
 
-    name = (body.get("name") or "").strip()
-    phone = (body.get("phone") or "").strip()
+    name        = (body.get("name") or "").strip()
+    phone       = (body.get("phone") or "").strip()
     pipeline_id = int(body.get("pipeline_id", 1))
     client_type = body.get("client_type", "физ")
-    telegram = body.get("telegram") or None
-    # Источник — с какой кнопки/формы сайта пришла заявка (напр. "Заказать звонок", "Заказать просчет").
-    # Поддерживаем оба названия поля на случай разных интеграций.
-    source = (body.get("source") or body.get("button") or None)
-    source = source.strip() if isinstance(source, str) else source
+    telegram    = body.get("telegram") or None
+    source      = (body.get("source") or body.get("button") or None)
+    source      = source.strip() if isinstance(source, str) else source
 
     if not name or not phone:
         return JSONResponse(status_code=422, content={"error": "name и phone обязательны"})
@@ -642,7 +543,7 @@ async def public_create_lead(request: Request, db: Session = Depends(get_db)):
         return {"message": "Лид уже существует", "phone": phone}
 
     pipeline = db.query(PipelineDB).filter(PipelineDB.pipeline_id == pipeline_id).first()
-    status = pipeline.stages.split("|")[0] if pipeline else "Новая заявка"
+    status   = pipeline.stages.split("|")[0] if pipeline else "Новая заявка"
 
     lead = LeadDB(
         name=name, phone=phone, status=status,
@@ -651,10 +552,13 @@ async def public_create_lead(request: Request, db: Session = Depends(get_db)):
     )
     db.add(lead)
     db.commit()
+
+    # ✅ Отправляем пуш-уведомление на телефон
+    send_fcm_push(name, phone)
+
     return {"message": "Заявка принята", "status": status}
 
-
-# ─────────── WIDGET.JS (встраиваемый скрипт для сайта) ───────────
+# ─────────── WIDGET.JS ───────────
 
 from fastapi.responses import Response
 
@@ -663,19 +567,14 @@ WIDGET_JS = r"""
   var scriptEl = document.currentScript;
   var token = scriptEl.getAttribute('data-token');
   var pipelineId = parseInt(scriptEl.getAttribute('data-pipeline') || '1');
-  // data-source — метка, с какой кнопки/цели пришла заявка (напр. "Заказать звонок", "Заказать просчет").
-  // Можно поставить несколько таких <script> с разными data-source на одной странице — у каждого будет своя кнопка.
   var source = scriptEl.getAttribute('data-source') || null;
-  // data-label — текст на кнопке (по умолчанию "Оставить заявку")
   var label = scriptEl.getAttribute('data-label') || 'Оставить заявку';
   var apiBase = scriptEl.src.replace('/widget.js', '');
 
-  // Уникальный id для этого экземпляра виджета — чтобы несколько кнопок на одной странице не конфликтовали
   window.__nxcrmInstances = (window.__nxcrmInstances || 0);
   var uid = 'nxcrm' + (window.__nxcrmInstances++);
   var bottomOffset = 24 + (window.__nxcrmInstances - 1) * 64;
 
-  // Inject CSS (один раз на страницу)
   if (!document.getElementById('nxcrm-style')) {
     var style = document.createElement('style');
     style.id = 'nxcrm-style';
@@ -697,7 +596,6 @@ WIDGET_JS = r"""
     document.head.appendChild(style);
   }
 
-  // Button
   var btn = document.createElement('button');
   btn.className = 'nxcrm-btn';
   btn.id = uid + '-btn';
@@ -705,38 +603,37 @@ WIDGET_JS = r"""
   btn.textContent = '📩 ' + label;
   document.body.appendChild(btn);
 
-  // Modal
   var overlay = document.createElement('div');
   overlay.className = 'nxcrm-overlay';
   overlay.id = uid + '-overlay';
   overlay.innerHTML =
     '<div class="nxcrm-modal">' +
-      '<button class="nxcrm-close">✕</button>' +
-      '<h3>' + label + '</h3>' +
-      '<p>Мы свяжемся с вами в ближайшее время</p>' +
-      '<div class="nxcrm-ok">✅ Заявка принята! Мы скоро свяжемся.</div>' +
-      '<input class="nxcrm-name" type="text" placeholder="Ваше имя *" />' +
-      '<input class="nxcrm-phone" type="tel" placeholder="Телефон *" />' +
-      '<input class="nxcrm-tg" type="text" placeholder="Telegram (необязательно)" />' +
-      '<button type="button" class="nxcrm-submit">Отправить заявку</button>' +
+    '<button class="nxcrm-close">✕</button>' +
+    '<h3>' + label + '</h3>' +
+    '<p>Мы свяжемся с вами в ближайшее время</p>' +
+    '<div class="nxcrm-ok">✅ Заявка принята! Мы скоро свяжемся.</div>' +
+    '<input class="nxcrm-name" type="text" placeholder="Ваше имя *" />' +
+    '<input class="nxcrm-phone" type="tel" placeholder="Телефон *" />' +
+    '<input class="nxcrm-tg" type="text" placeholder="Telegram (необязательно)" />' +
+    '<button type="button" class="nxcrm-submit">Отправить заявку</button>' +
     '</div>';
   document.body.appendChild(overlay);
 
-  var closeBtn = overlay.querySelector('.nxcrm-close');
+  var closeBtn  = overlay.querySelector('.nxcrm-close');
   var nameInput = overlay.querySelector('.nxcrm-name');
-  var phoneInput = overlay.querySelector('.nxcrm-phone');
-  var tgInput = overlay.querySelector('.nxcrm-tg');
+  var phoneInput= overlay.querySelector('.nxcrm-phone');
+  var tgInput   = overlay.querySelector('.nxcrm-tg');
   var submitBtn = overlay.querySelector('.nxcrm-submit');
-  var okBox = overlay.querySelector('.nxcrm-ok');
+  var okBox     = overlay.querySelector('.nxcrm-ok');
 
   btn.onclick = function() { overlay.classList.add('open'); };
   closeBtn.onclick = function() { overlay.classList.remove('open'); };
   overlay.onclick = function(e) { if (e.target === overlay) overlay.classList.remove('open'); };
 
   submitBtn.onclick = function() {
-    var name = nameInput.value.trim();
+    var name  = nameInput.value.trim();
     var phone = phoneInput.value.trim();
-    var tg = tgInput.value.trim();
+    var tg    = tgInput.value.trim();
     if (!name || !phone) { alert('Заполните имя и телефон'); return; }
     fetch(apiBase + '/public/leads', {
       method: 'POST',
@@ -766,18 +663,13 @@ WIDGET_JS = r"""
 
 @app.get("/widget.js", include_in_schema=False)
 def serve_widget():
-    """Возвращает встраиваемый JS-виджет для сайтов."""
     return Response(content=WIDGET_JS, media_type="application/javascript")
 
-
-# ─────────── STATIC FILES & INDEX ───────────
+# ─────────── STATIC & INDEX ───────────
 
 STATIC_DIR = os.path.dirname(os.path.abspath(__file__))
-
-# Раздача логотипов, favicon и прочей статики по пути /static/<filename>
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
-# Главная страница CRM — отдаём index.html (а не JSON 404!)
 @app.get("/", include_in_schema=False)
 def serve_index():
     return FileResponse(
@@ -785,14 +677,12 @@ def serve_index():
         headers={"Cache-Control": "no-store, no-cache, must-revalidate, max-age=0"},
     )
 
-# Favicon (чтобы не было 404 в консоли браузера)
 @app.get("/favicon.ico", include_in_schema=False)
 def serve_favicon():
     favicon_path = os.path.join(STATIC_DIR, "favicon.png")
     if os.path.exists(favicon_path):
         return FileResponse(favicon_path, media_type="image/png")
     return JSONResponse(status_code=404, content={"detail": "favicon not found"})
-
 
 # ─────────── ENTRYPOINT ───────────
 

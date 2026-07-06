@@ -652,6 +652,20 @@
         </div>
       </div>
 
+      <div class="card" style="margin-bottom:20px;">
+        <div class="card-header">
+          <div class="card-title">
+            <svg fill="none" stroke="currentColor" viewBox="0 0 24 24" style="width:16px;height:16px;color:var(--purple-bright);"><path stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z"/></svg>
+            Почта (IMAP) — письма становятся лидами
+          </div>
+          <button class="btn btn-primary btn-sm" onclick="openAddEmailAccount()">+ Добавить ящик</button>
+        </div>
+        <div class="card-body">
+          <p style="font-size:12px;color:var(--gray-light);margin-bottom:12px;line-height:1.6;">CRM раз в минуту проверяет подключённые почтовые ящики по IMAP. Каждое новое письмо (кроме писем от самого ящика) автоматически становится лидом в выбранной воронке — с темой письма и текстом в заметке.</p>
+          <div id="emailAccountsList"><div class="empty-state">Загрузка…</div></div>
+        </div>
+      </div>
+
       <div class="integ-grid">
         <div class="integ-card">
           <div class="integ-card-head">
@@ -967,7 +981,36 @@
   </div>
 </div>
 
+<!-- Add/Edit Email Account (IMAP) -->
+<div class="modal-overlay" id="modal-addEmailAccount">
+  <div class="modal">
+    <div class="modal-head"><div class="modal-title" id="emailAccountModalTitle">Почтовый ящик</div><button class="modal-close" onclick="closeModal('addEmailAccount')">✕</button></div>
+    <div class="modal-body">
+      <div class="form-row"><label class="form-label">Название (имя лида) *</label><input type="text" class="form-input" id="eaName" placeholder="zakaz@company.by" /></div>
+      <div class="form-row"><label class="form-label">Email *</label><input type="text" class="form-input" id="eaEmail" placeholder="zakaz@company.by" /></div>
+      <div class="form-row"><label class="form-label">Пароль (пароль приложения) <span id="eaPassHint" style="color:var(--gray);font-weight:400;"></span></label><input type="password" class="form-input" id="eaPassword" placeholder="••••••••" /></div>
+      <div class="form-row col-2">
+        <div><label class="form-label">IMAP-хост *</label><input type="text" class="form-input" id="eaImapHost" placeholder="imap.hoster.by" /></div>
+        <div><label class="form-label">IMAP-порт</label><input type="number" class="form-input" id="eaImapPort" value="993" /></div>
+      </div>
+      <div class="form-row"><label class="form-label" style="display:flex;align-items:center;gap:8px;"><input type="checkbox" id="eaImapSsl" checked /> IMAP по SSL</label></div>
+      <div class="form-row col-2">
+        <div><label class="form-label">Воронка для новых лидов</label><select class="form-select" id="eaPipeline"></select></div>
+        <div><label class="form-label">Тип клиента</label><select class="form-select" id="eaClientType"><option value="юр">Юр. лицо</option><option value="физ">Физ. лицо</option></select></div>
+      </div>
+      <div class="form-row"><label class="form-label" style="display:flex;align-items:center;gap:8px;"><input type="checkbox" id="eaActive" checked /> Ящик активен (проверять почту)</label></div>
+      <p style="font-size:11px;color:var(--gray);line-height:1.6;">При первом включении CRM запоминает текущее последнее письмо и не создаёт лиды из старой переписки — лиды появятся только из новых писем.</p>
+    </div>
+    <div class="modal-foot">
+      <button class="btn btn-ghost" onclick="testEmailAccountForm()">Проверить соединение</button>
+      <button class="btn btn-ghost" onclick="closeModal('addEmailAccount')">Отмена</button>
+      <button class="btn btn-primary" onclick="saveEmailAccount()">Сохранить</button>
+    </div>
+  </div>
+</div>
+
 <div class="toast-wrap" id="toastWrap"></div>
+
 
 <script>
 const API = window.location.origin;
@@ -1904,6 +1947,7 @@ async function loadIntegrations(){
   $('widgetSnippet').textContent = `<script src="${API}/widget.js" data-token="${token}" data-pipeline="1" data-source="Заказать звонок" data-label="Заказать звонок"><\/script>\n<script src="${API}/widget.js" data-token="${token}" data-pipeline="1" data-source="Заказать просчет" data-label="Заказать просчет"><\/script>`;
   $('curlSnippet').textContent = `curl -X POST ${API}/leads \\\n  -H "Content-Type: application/json" \\\n  -d '{\n    "name":"Иван",\n    "phone":"+79991234567",\n    "pipeline_id":1,\n    "client_type":"физ",\n    "source":"Сайт — кнопка «Заказать звонок»",\n    "telegram":"@ivan",\n    "whatsapp":"+79991234567"\n  }'`;
   const tgUrl = $('tgWebhookUrl'); if (tgUrl) tgUrl.textContent = `${API}/telegram/webhook`;
+  loadEmailAccounts();
 }
 async function regenToken(){
   if(!confirm('Пересоздать токен? Старый перестанет работать.')) return;
@@ -1912,6 +1956,114 @@ async function regenToken(){
 }
 function copyToken(){ navigator.clipboard.writeText($('apiTokenBox').firstChild.textContent.trim()).then(()=>toast('Токен скопирован')).catch(()=>toast('Ошибка','error')); }
 function copySnippet(id){ navigator.clipboard.writeText($(id).textContent).then(()=>toast('Скопировано')).catch(()=>toast('Ошибка','error')); }
+
+// ── EMAIL ACCOUNTS (IMAP) ──
+let editingEmailAccountId = null;
+async function loadEmailAccounts(){
+  const list = await api('GET','/email-accounts');
+  const box = $('emailAccountsList');
+  if(!box) return;
+  if(!list || !list.length){ box.innerHTML = '<div class="empty-state">Почтовые ящики не подключены</div>'; return; }
+  box.innerHTML = list.map(a => {
+    const statusHtml = a.active
+      ? `<span class="status-dot active"></span>включен`
+      : `<span class="status-dot" style="background:var(--gray);"></span>выключен`;
+    const lastChecked = a.last_checked ? new Date(a.last_checked).toLocaleString('ru-RU') : 'ещё не проверялся';
+    const errHtml = a.last_error ? `<div style="color:#EF4444;font-size:11px;margin-top:2px;">Ошибка: ${escapeHtml(a.last_error)}</div>` : '';
+    const passHtml = a.has_password ? '' : `<div style="color:#F59E0B;font-size:11px;margin-top:2px;">⚠ Не указан пароль — почта не проверяется</div>`;
+    return `<div class="mgr-row" style="align-items:flex-start;flex-wrap:wrap;gap:14px;">
+      <div style="flex:1;min-width:200px;">
+        <div style="color:var(--white);font-weight:600;">${escapeHtml(a.name)}</div>
+        <div style="font-size:12px;color:var(--gray);">${escapeHtml(a.email)} · ${escapeHtml(a.imap_host)}:${a.imap_port}</div>
+        <div style="font-size:11px;color:var(--gray);margin-top:2px;">Проверено: ${lastChecked} · Лидов создано: ${a.leads_created}</div>
+        ${errHtml}${passHtml}
+      </div>
+      <div style="font-size:12px;color:var(--gray-light);white-space:nowrap;">${statusHtml}</div>
+      <div style="display:flex;gap:6px;flex-wrap:wrap;">
+        <button class="btn btn-ghost btn-xs" onclick="pollEmailAccountNow(${a.id})">Проверить сейчас</button>
+        <button class="btn btn-ghost btn-xs" onclick="openAddEmailAccount(${a.id})">Изменить</button>
+        <button class="btn btn-ghost btn-xs" onclick="deleteEmailAccountConfirm(${a.id})">Удалить</button>
+      </div>
+    </div>`;
+  }).join('');
+}
+async function openAddEmailAccount(id){
+  editingEmailAccountId = id || null;
+  const pipelines = await ensurePipelines();
+  $('eaPipeline').innerHTML = pipelines.map(p => `<option value="${p.pipeline_id}">${escapeHtml(p.name)}</option>`).join('');
+  if(id){
+    const list = await api('GET','/email-accounts');
+    const a = (list || []).find(x => x.id === id);
+    if(!a){ toast('Ящик не найден','error'); return; }
+    $('emailAccountModalTitle').textContent = 'Редактирование ящика';
+    $('eaName').value = a.name; $('eaEmail').value = a.email; $('eaPassword').value = '';
+    $('eaPassHint').textContent = a.has_password ? '(оставьте пустым, чтобы не менять)' : '(пароль не задан)';
+    $('eaImapHost').value = a.imap_host; $('eaImapPort').value = a.imap_port; $('eaImapSsl').checked = a.imap_ssl;
+    $('eaPipeline').value = a.pipeline_id; $('eaClientType').value = a.client_type;
+    $('eaActive').checked = a.active;
+  } else {
+    $('emailAccountModalTitle').textContent = 'Новый почтовый ящик';
+    $('eaName').value=''; $('eaEmail').value=''; $('eaPassword').value=''; $('eaPassHint').textContent='';
+    $('eaImapHost').value='imap.hoster.by'; $('eaImapPort').value=993; $('eaImapSsl').checked=true;
+    $('eaClientType').value='юр'; $('eaActive').checked=true;
+  }
+  openModal('addEmailAccount');
+}
+function _emailAccountPayload(){
+  return {
+    name: $('eaName').value.trim(),
+    email: $('eaEmail').value.trim(),
+    password: $('eaPassword').value || null,
+    imap_host: $('eaImapHost').value.trim(),
+    imap_port: parseInt($('eaImapPort').value) || 993,
+    imap_ssl: $('eaImapSsl').checked,
+    pipeline_id: parseInt($('eaPipeline').value),
+    client_type: $('eaClientType').value,
+    active: $('eaActive').checked,
+  };
+}
+async function saveEmailAccount(){
+  const payload = _emailAccountPayload();
+  if(!payload.name || !payload.email || !payload.imap_host){ toast('Заполните название, email и IMAP-хост','error'); return; }
+  let r;
+  if(editingEmailAccountId){
+    r = await api('PUT', `/email-accounts/${editingEmailAccountId}`, payload);
+  } else {
+    r = await api('POST', '/email-accounts', payload);
+  }
+  if(r?.error){ toast(r.error,'error'); return; }
+  toast('Ящик сохранён');
+  closeModal('addEmailAccount');
+  loadEmailAccounts();
+}
+async function testEmailAccountForm(){
+  const payload = _emailAccountPayload();
+  if(!payload.name || !payload.email || !payload.imap_host){ toast('Заполните название, email и IMAP-хост','error'); return; }
+  let id = editingEmailAccountId;
+  let r = id ? await api('PUT', `/email-accounts/${id}`, payload) : await api('POST', '/email-accounts', payload);
+  if(r?.error){ toast(r.error,'error'); return; }
+  if(!id){ editingEmailAccountId = r.data.id; id = r.data.id; }
+  const res = await api('POST', `/email-accounts/${id}/test`);
+  if(res?.ok) toast('Соединение успешно установлено');
+  else toast('Ошибка подключения: ' + (res?.error || 'неизвестно'), 'error');
+  loadEmailAccounts();
+}
+async function pollEmailAccountNow(id){
+  toast('Проверяем почту…');
+  const r = await api('POST', `/email-accounts/${id}/poll`);
+  if(r?.error){ toast(r.error,'error'); return; }
+  toast(r?.message || 'Готово');
+  loadEmailAccounts();
+  if(currentView==='leads') loadLeadsView();
+  if(currentView==='kanban') loadKanban();
+}
+async function deleteEmailAccountConfirm(id){
+  if(!confirm('Удалить почтовый ящик? Уже созданные лиды останутся.')) return;
+  const r = await api('DELETE', `/email-accounts/${id}`);
+  if(r?.error){ toast(r.error,'error'); return; }
+  toast('Ящик удалён');
+  loadEmailAccounts();
+}
 
 // ── HELPERS ──
 async function ensurePipelines(force){

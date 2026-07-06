@@ -1,9 +1,16 @@
 import os
 import csv
 import io
+import re
 import json
+import time
 import httpx
 import secrets
+import threading
+import imaplib
+import email as email_lib
+from email.header import decode_header
+from email.utils import parseaddr
 from datetime import datetime, timedelta
 from typing import Optional, List
 from fastapi import FastAPI, Depends, Request, Query, Response
@@ -167,6 +174,29 @@ class TelegramNotifyDB(Base):
     message_id = Column(Integer, nullable=False)
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
 
+class EmailAccountDB(Base):
+    """Корпоративный почтовый ящик, подключённый по IMAP — входящие письма
+    автоматически превращаются в лиды (карточки клиентов)."""
+    __tablename__ = "email_accounts"
+    id            = Column(Integer, primary_key=True, index=True)
+    name          = Column(String, nullable=False)          # имя ящика -> используется как имя лида
+    email         = Column(String, nullable=False)           # используется как контакт лида
+    password      = Column(String, nullable=True)            # пароль/пароль приложения от почты
+    imap_host     = Column(String, nullable=False, default="imap.hoster.by")
+    imap_port     = Column(Integer, nullable=False, default=993)
+    imap_ssl      = Column(Boolean, default=True)
+    smtp_host     = Column(String, nullable=True, default="smtp.hoster.by")
+    smtp_port     = Column(Integer, nullable=True, default=465)
+    smtp_ssl      = Column(Boolean, default=True)
+    pipeline_id   = Column(Integer, ForeignKey("pipelines.pipeline_id"), nullable=False, default=2)
+    client_type   = Column(String, default="юр")
+    active        = Column(Boolean, default=False)
+    last_uid      = Column(Integer, nullable=True, default=None)  # None = ещё ни разу не проверяли (baseline)
+    last_checked  = Column(DateTime, nullable=True)
+    last_error    = Column(Text, nullable=True)
+    leads_created = Column(Integer, default=0)
+    created_at    = Column(DateTime, default=datetime.utcnow)
+
 # ─────────── DB INIT ───────────
 
 Base.metadata.create_all(bind=engine)
@@ -289,6 +319,17 @@ def run_migrations():
             except Exception:
                 pass
 
+        # Добавляем этап "Новая заявка" в воронку юр. лиц, чтобы заявки
+        # из почты сразу были видны на канбане (а не только в списке лидов)
+        try:
+            row = conn.execute(text("SELECT stages FROM pipelines WHERE pipeline_id=2")).fetchone()
+            if row and row[0] and "Новая заявка" not in row[0].split("|"):
+                conn.execute(text("UPDATE pipelines SET stages=:s WHERE pipeline_id=2"),
+                             {"s": "Новая заявка|" + row[0]})
+                print("[migrate] добавлен этап 'Новая заявка' в воронку 'Юридические лица'")
+        except Exception as e:
+            print(f"[migrate] pipeline stage update: {e}")
+
 run_migrations()
 
 # ─────────── СИД ───────────
@@ -391,6 +432,18 @@ def seed_data():
             db.commit()
             print("[seed] настройки по умолчанию")
 
+        # Почтовый ящик по умолчанию — данные хостера уже проставлены,
+        # пароль нужно ввести в интерфейсе (раздел «Настройки → Почта»)
+        if db.query(EmailAccountDB).count() == 0:
+            db.add(EmailAccountDB(
+                name="zakaz@cleanfloor.by", email="zakaz@cleanfloor.by", password=None,
+                imap_host="imap.hoster.by", imap_port=993, imap_ssl=True,
+                smtp_host="smtp.hoster.by", smtp_port=465, smtp_ssl=True,
+                pipeline_id=2, client_type="юр", active=False, last_uid=None,
+            ))
+            db.commit()
+            print("[seed] почтовый ящик zakaz@cleanfloor.by добавлен (нужно указать пароль и включить)")
+
 seed_data()
 
 # ─────────── APP ───────────
@@ -414,6 +467,13 @@ def _auto_setup_telegram_webhook():
         print("[TG] webhook настроен автоматически")
     except Exception as e:
         print(f"[TG] webhook auto-setup: {e}")
+
+@app.on_event("startup")
+def _start_email_poll_thread():
+    """Запускаем фоновый поток опроса подключённых почтовых ящиков по IMAP."""
+    t = threading.Thread(target=_email_poll_loop, daemon=True)
+    t.start()
+    print("[email] фоновый опрос почты запущен")
 
 # ─────────── SCHEMAS ───────────
 
@@ -525,6 +585,34 @@ class BulkUpdate(BaseModel):
     add_tags:      Optional[List[int]] = None
     remove_tags:   Optional[List[int]] = None
     delete:        Optional[bool] = False
+
+class EmailAccountIn(BaseModel):
+    name:          str
+    email:         str
+    password:      Optional[str] = None
+    imap_host:     str = "imap.hoster.by"
+    imap_port:     int = 993
+    imap_ssl:      bool = True
+    smtp_host:     Optional[str] = "smtp.hoster.by"
+    smtp_port:     Optional[int] = 465
+    smtp_ssl:      Optional[bool] = True
+    pipeline_id:   int = 2
+    client_type:   str = "юр"
+    active:        bool = True
+
+class EmailAccountUpdate(BaseModel):
+    name:          Optional[str] = None
+    email:         Optional[str] = None
+    password:      Optional[str] = None
+    imap_host:     Optional[str] = None
+    imap_port:     Optional[int] = None
+    imap_ssl:      Optional[bool] = None
+    smtp_host:     Optional[str] = None
+    smtp_port:     Optional[int] = None
+    smtp_ssl:      Optional[bool] = None
+    pipeline_id:   Optional[int] = None
+    client_type:   Optional[str] = None
+    active:        Optional[bool] = None
 
 def _clean(v):
     if v is None: return None
@@ -654,6 +742,200 @@ def _log_activity(db, phone, event_type, payload=None, manager_id=None):
         ))
     except Exception:
         pass
+
+# ─────────── EMAIL (IMAP) — заявки с почты становятся лидами ───────────
+
+def _decode_mime(s):
+    if not s:
+        return ""
+    try:
+        parts = decode_header(s)
+    except Exception:
+        return s
+    out = []
+    for chunk, enc in parts:
+        if isinstance(chunk, bytes):
+            try:
+                out.append(chunk.decode(enc or "utf-8", errors="ignore"))
+            except Exception:
+                out.append(chunk.decode("utf-8", errors="ignore"))
+        else:
+            out.append(chunk)
+    return "".join(out)
+
+def _get_email_body(msg) -> str:
+    plain, html = None, None
+    if msg.is_multipart():
+        for part in msg.walk():
+            disp = str(part.get("Content-Disposition") or "")
+            if "attachment" in disp:
+                continue
+            ctype = part.get_content_type()
+            try:
+                payload = part.get_payload(decode=True)
+            except Exception:
+                payload = None
+            if not payload:
+                continue
+            charset = part.get_content_charset() or "utf-8"
+            try:
+                text_val = payload.decode(charset, errors="ignore")
+            except Exception:
+                text_val = payload.decode("utf-8", errors="ignore")
+            if ctype == "text/plain" and plain is None:
+                plain = text_val
+            elif ctype == "text/html" and html is None:
+                html = text_val
+    else:
+        try:
+            payload = msg.get_payload(decode=True)
+            charset = msg.get_content_charset() or "utf-8"
+            plain = payload.decode(charset, errors="ignore") if payload else (msg.get_payload() or "")
+        except Exception:
+            plain = msg.get_payload() if isinstance(msg.get_payload(), str) else ""
+    if plain:
+        return plain.strip()
+    if html:
+        return re.sub("<[^>]+>", " ", html).strip()
+    return ""
+
+def _imap_connect(acc: "EmailAccountDB"):
+    if acc.imap_ssl:
+        conn = imaplib.IMAP4_SSL(acc.imap_host, acc.imap_port)
+    else:
+        conn = imaplib.IMAP4(acc.imap_host, acc.imap_port)
+    conn.login(acc.email, acc.password or "")
+    return conn
+
+def _email_account_test(acc: "EmailAccountDB"):
+    try:
+        conn = _imap_connect(acc)
+        conn.select("INBOX", readonly=True)
+        conn.logout()
+        return True, None
+    except Exception as e:
+        return False, str(e)
+
+def _poll_email_account(account_id: int) -> int:
+    """Проверяет один ящик по IMAP и создаёт лиды по новым письмам. Возвращает число созданных лидов."""
+    created = 0
+    with SessionLocal() as db:
+        acc = db.query(EmailAccountDB).filter(EmailAccountDB.id == account_id).first()
+        if not acc or not acc.active or not acc.password:
+            return 0
+        conn = None
+        try:
+            conn = _imap_connect(acc)
+            conn.select("INBOX")
+            status, data = conn.uid("search", None, "ALL")
+            if status != "OK":
+                raise Exception("Ошибка IMAP SEARCH")
+            uids = [int(u) for u in data[0].split()] if data and data[0] else []
+
+            if acc.last_uid is None:
+                # первая проверка — не создаём лиды из старых писем, просто фиксируем текущее состояние
+                acc.last_uid = max(uids) if uids else 0
+                acc.last_checked = datetime.utcnow()
+                acc.last_error = None
+                db.commit()
+                return 0
+
+            new_uids = sorted(u for u in uids if u > acc.last_uid)
+            max_uid = acc.last_uid
+            for uid in new_uids:
+                try:
+                    st, msg_data = conn.uid("fetch", str(uid), "(RFC822)")
+                    if st != "OK" or not msg_data or not msg_data[0]:
+                        max_uid = max(max_uid, uid)
+                        continue
+                    raw = msg_data[0][1]
+                    msg = email_lib.message_from_bytes(raw)
+                    subject = _decode_mime(msg.get("Subject")) or "(без темы)"
+                    from_name, from_addr = parseaddr(msg.get("From", ""))
+                    from_name = _decode_mime(from_name)
+                    body = _get_email_body(msg)
+
+                    # письма от самого ящика (авто-ответы и т.п.) не превращаем в лиды
+                    if from_addr and acc.email and from_addr.strip().lower() == acc.email.strip().lower():
+                        max_uid = max(max_uid, uid)
+                        continue
+
+                    phone_placeholder = f"email-{acc.id}-{uid}"
+                    if not db.query(LeadDB).filter(LeadDB.phone == phone_placeholder).first():
+                        pipeline = db.query(PipelineDB).filter(PipelineDB.pipeline_id == acc.pipeline_id).first()
+                        stages = pipeline.stages.split("|") if pipeline else []
+                        status_val = "Новая заявка" if "Новая заявка" in stages else (stages[0] if stages else "Новая заявка")
+                        lead = LeadDB(
+                            name=acc.name or acc.email,
+                            phone=phone_placeholder,
+                            status=status_val,
+                            email=acc.email,
+                            pipeline_id=acc.pipeline_id,
+                            client_type=acc.client_type or "юр",
+                            source="Email",
+                            comment=f"Тема письма: {subject}",
+                        )
+                        db.add(lead)
+                        db.flush()
+                        note_text = (
+                            f"📧 Письмо на {acc.email}\n"
+                            f"От: {from_name or '—'} <{from_addr or '—'}>\n"
+                            f"Тема: {subject}\n\n{body[:5000]}"
+                        )
+                        db.add(NoteDB(phone=phone_placeholder, text=note_text, note_type="email"))
+                        _log_activity(db, phone_placeholder, "lead_created",
+                                      {"name": lead.name, "source": "Email", "subject": subject})
+                        db.commit()
+                        created += 1
+                    max_uid = max(max_uid, uid)
+                except Exception as e:
+                    print(f"[email] ошибка обработки письма uid={uid} ({acc.email}): {e}")
+                    max_uid = max(max_uid, uid)
+                    continue
+
+            acc.last_uid = max_uid
+            acc.last_checked = datetime.utcnow()
+            acc.last_error = None
+            acc.leads_created = (acc.leads_created or 0) + created
+            db.commit()
+        except Exception as e:
+            acc.last_error = str(e)
+            acc.last_checked = datetime.utcnow()
+            db.commit()
+            print(f"[email] ошибка подключения к {acc.email}: {e}")
+        finally:
+            if conn is not None:
+                try:
+                    conn.logout()
+                except Exception:
+                    pass
+    return created
+
+def _email_poll_loop():
+    interval = int(os.getenv("EMAIL_POLL_SECONDS", "60"))
+    while True:
+        try:
+            with SessionLocal() as db:
+                ids = [a.id for a in db.query(EmailAccountDB).filter(EmailAccountDB.active == True).all()]
+            for aid in ids:
+                _poll_email_account(aid)
+        except Exception as e:
+            print(f"[email] ошибка цикла опроса почты: {e}")
+        time.sleep(interval)
+
+def _email_account_to_dict(a: "EmailAccountDB"):
+    return {
+        "id": a.id, "name": a.name, "email": a.email,
+        "has_password": bool(a.password),
+        "imap_host": a.imap_host, "imap_port": a.imap_port, "imap_ssl": a.imap_ssl,
+        "smtp_host": a.smtp_host, "smtp_port": a.smtp_port, "smtp_ssl": a.smtp_ssl,
+        "pipeline_id": a.pipeline_id, "client_type": a.client_type,
+        "active": a.active,
+        "last_checked": a.last_checked.isoformat() if a.last_checked else None,
+        "last_error": a.last_error,
+        "leads_created": a.leads_created or 0,
+        "baseline_done": a.last_uid is not None,
+    }
 
 def _lead_to_dict(lead: LeadDB, db: Session):
     tags = db.query(TagDB).join(LeadTagDB, LeadTagDB.tag_id == TagDB.tag_id).filter(LeadTagDB.lead_id == lead.id).all()
@@ -1321,6 +1603,72 @@ def assign_manager(phone: str, manager_id: Optional[int] = None, db: Session = D
     _log_activity(db, phone, "assigned", {"manager_id": manager_id})
     db.commit()
     return {"message": "Назначен"}
+
+# ─────────── EMAIL ACCOUNTS (IMAP) ───────────
+
+@app.get("/email-accounts")
+def list_email_accounts(db: Session = Depends(get_db)):
+    return [_email_account_to_dict(a) for a in db.query(EmailAccountDB).order_by(EmailAccountDB.id).all()]
+
+@app.post("/email-accounts")
+def create_email_account(payload: EmailAccountIn, db: Session = Depends(get_db)):
+    if not db.query(PipelineDB).filter(PipelineDB.pipeline_id == payload.pipeline_id).first():
+        return JSONResponse(status_code=422, content={"error": f"Воронка с id {payload.pipeline_id} не найдена"})
+    a = EmailAccountDB(
+        name=payload.name, email=payload.email, password=payload.password,
+        imap_host=payload.imap_host, imap_port=payload.imap_port, imap_ssl=payload.imap_ssl,
+        smtp_host=payload.smtp_host, smtp_port=payload.smtp_port, smtp_ssl=payload.smtp_ssl,
+        pipeline_id=payload.pipeline_id, client_type=payload.client_type,
+        active=payload.active, last_uid=None,
+    )
+    db.add(a); db.commit(); db.refresh(a)
+    return {"message": "Почтовый ящик добавлен", "data": _email_account_to_dict(a)}
+
+@app.put("/email-accounts/{account_id}")
+def update_email_account(account_id: int, payload: EmailAccountUpdate, db: Session = Depends(get_db)):
+    a = db.query(EmailAccountDB).filter(EmailAccountDB.id == account_id).first()
+    if not a:
+        return JSONResponse(status_code=404, content={"error": "Не найден"})
+    data = payload.model_dump(exclude_unset=True)
+    # если пришёл пустой пароль — не затираем существующий (значит поле просто не меняли)
+    if "password" in data and not data["password"]:
+        data.pop("password")
+    for k, v in data.items():
+        setattr(a, k, v)
+    db.commit()
+    return {"message": "Сохранено", "data": _email_account_to_dict(a)}
+
+@app.delete("/email-accounts/{account_id}")
+def delete_email_account(account_id: int, db: Session = Depends(get_db)):
+    a = db.query(EmailAccountDB).filter(EmailAccountDB.id == account_id).first()
+    if not a:
+        return {"error": "Не найден"}
+    db.delete(a); db.commit()
+    return {"message": "Ящик удалён"}
+
+@app.post("/email-accounts/{account_id}/test")
+def test_email_account(account_id: int, db: Session = Depends(get_db)):
+    a = db.query(EmailAccountDB).filter(EmailAccountDB.id == account_id).first()
+    if not a:
+        return JSONResponse(status_code=404, content={"error": "Не найден"})
+    if not a.password:
+        return {"ok": False, "error": "Не указан пароль"}
+    ok, err = _email_account_test(a)
+    return {"ok": ok, "error": err}
+
+@app.post("/email-accounts/{account_id}/poll")
+def poll_email_account_now(account_id: int, db: Session = Depends(get_db)):
+    """Ручная проверка почты прямо сейчас (не дожидаясь фонового цикла)."""
+    a = db.query(EmailAccountDB).filter(EmailAccountDB.id == account_id).first()
+    if not a:
+        return JSONResponse(status_code=404, content={"error": "Не найден"})
+    if not a.active:
+        return {"error": "Ящик выключен"}
+    if not a.password:
+        return {"error": "Не указан пароль"}
+    created = _poll_email_account(account_id)
+    db.refresh(a)
+    return {"message": f"Проверено. Новых лидов: {created}", "created": created, "data": _email_account_to_dict(a)}
 
 # ─────────── EXPORT ───────────
 

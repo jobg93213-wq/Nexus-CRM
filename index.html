@@ -392,17 +392,21 @@
   </button>
 </div>
 
-<!-- ── ЭКРАН ВЫБОРА "КТО ВЫ" (личность для реального онлайн-статуса) ── -->
+<!-- ── ЭКРАН ВВОДА ЛОГИНА/ПАРОЛЯ ── -->
 <div id="identityScreen" style="
   position:fixed;inset:0;z-index:9998;display:none;
   background:#0A0A0F;flex-direction:column;align-items:center;justify-content:center;
   gap:14px;padding:24px;
 ">
-  <div style="font-size:16px;font-weight:700;color:#F9FAFB;margin-bottom:2px;">Кто вы?</div>
-  <div style="font-size:12px;color:#6B7280;margin-bottom:10px;text-align:center;max-width:320px;">Выберите свой аккаунт — это нужно, чтобы менеджеры видели ваш реальный статус онлайн и знали, кто взял заявку в работу.</div>
-  <div id="identityList" style="width:100%;max-width:320px;display:flex;flex-direction:column;gap:8px;max-height:50vh;overflow-y:auto;"></div>
-  <div id="identityEmpty" style="display:none;font-size:12px;color:#EF4444;text-align:center;max-width:320px;">Нет ни одного аккаунта с этой ролью. Попросите менеджера создать вас во вкладке «Менеджеры».</div>
-  <button onclick="document.getElementById('identityScreen').style.display='none';document.getElementById('roleScreen').style.display='flex';" style="margin-top:6px;background:transparent;border:1px solid #242430;color:#6B7280;padding:8px 16px;border-radius:8px;cursor:pointer;font-size:12px;font-family:inherit;">← Назад</button>
+  <div id="identityTitle" style="font-size:16px;font-weight:700;color:#F9FAFB;margin-bottom:2px;">Вход</div>
+  <div style="font-size:12px;color:#6B7280;margin-bottom:6px;text-align:center;max-width:320px;">Введите логин и пароль вашей учётной записи.</div>
+  <div style="width:100%;max-width:320px;display:flex;flex-direction:column;gap:10px;">
+    <input id="authLogin" type="text" placeholder="Логин" autocomplete="username" style="width:100%;box-sizing:border-box;padding:12px 14px;background:#111118;border:1.5px solid #242430;border-radius:10px;color:#F9FAFB;font-size:14px;font-family:inherit;outline:none;" />
+    <input id="authPassword" type="password" placeholder="Пароль" autocomplete="current-password" onkeydown="if(event.key==='Enter')submitLogin()" style="width:100%;box-sizing:border-box;padding:12px 14px;background:#111118;border:1.5px solid #242430;border-radius:10px;color:#F9FAFB;font-size:14px;font-family:inherit;outline:none;" />
+  </div>
+  <div id="authError" style="display:none;font-size:12px;color:#EF4444;text-align:center;max-width:320px;"></div>
+  <button onclick="submitLogin()" style="width:100%;max-width:320px;padding:13px;border:none;border-radius:10px;background:#6D28D9;color:#fff;font-size:15px;font-weight:600;cursor:pointer;font-family:inherit;">Войти</button>
+  <button onclick="document.getElementById('identityScreen').style.display='none';document.getElementById('roleScreen').style.display='flex';" style="margin-top:2px;background:transparent;border:1px solid #242430;color:#6B7280;padding:8px 16px;border-radius:8px;cursor:pointer;font-size:12px;font-family:inherit;">← Назад</button>
 </div>
 
 <!-- MOBILE HEADER -->
@@ -575,7 +579,7 @@
         <p style="font-size:13px;color:var(--gray);">Команда и их клиенты</p>
         <button class="btn btn-primary" onclick="openModal('addManager')">+ Менеджер</button>
       </div>
-      <div class="card"><div class="table-wrap"><table><thead><tr><th>ID</th><th>Имя</th><th>Роль</th><th>Контакты</th><th>Клиентов</th><th>Статус</th><th>Telegram</th></tr></thead><tbody id="managersBody"></tbody></table></div></div>
+      <div class="card"><div class="table-wrap"><table><thead><tr><th>ID</th><th>Имя</th><th>Роль</th><th>Логин</th><th>Контакты</th><th>Клиентов</th><th>Статус</th><th>Telegram</th></tr></thead><tbody id="managersBody"></tbody></table></div></div>
     </div>
 
     <!-- TASKS -->
@@ -976,6 +980,10 @@
         <div><label class="form-label">Email</label><input type="text" class="form-input" id="managerEmail" placeholder="anna@example.com" /></div>
       </div>
       <div class="form-row"><label class="form-label">Роль</label><select class="form-select" id="managerRole"><option value="manager">Менеджер</option><option value="admin">Администратор</option><option value="cleaner">Клинер</option></select></div>
+      <div class="form-row col-2">
+        <div><label class="form-label">Логин *</label><input type="text" class="form-input" id="managerLogin" placeholder="Manager2" /></div>
+        <div><label class="form-label">Пароль *</label><input type="text" class="form-input" id="managerPassword" placeholder="пароль для входа" /></div>
+      </div>
     </div>
     <div class="modal-foot"><button class="btn btn-ghost" onclick="closeModal('addManager')">Отмена</button><button class="btn btn-primary" onclick="addManager()">Добавить</button></div>
   </div>
@@ -1617,8 +1625,8 @@ async function loadManagers(){
       : (isMe
           ? `<button class="btn btn-ghost btn-xs" onclick="openTelegramLink(${m.manager_id})">Подключить</button>`
           : `<span style="color:var(--gray);font-size:12px;">—</span>`);
-    return `<tr><td data-label="ID" style="color:var(--gray);">#${m.manager_id}</td><td class="bold" data-label="Имя">${escapeHtml(m.name)}${isMe?' <span style="color:var(--purple-bright);font-size:11px;">(вы)</span>':''}</td><td data-label="Роль"><span class="badge ${m.role==='admin'?'status-mail':'status-default'}">${ROLE_LABELS[m.role]||escapeHtml(m.role)}</span></td><td data-label="Контакты" style="font-size:12px;color:var(--gray);">${escapeHtml(m.phone||'')} ${escapeHtml(m.email||'')}</td><td data-label="Клиентов">${cnt}</td><td data-label="Статус">${statusHtml}</td><td data-label="Telegram">${tgHtml}</td></tr>`;
-  }).join('') : `<tr><td colspan="7"><div class="empty-state">Нет менеджеров</div></td></tr>`;
+    return `<tr><td data-label="ID" style="color:var(--gray);">#${m.manager_id}</td><td class="bold" data-label="Имя">${escapeHtml(m.name)}${isMe?' <span style="color:var(--purple-bright);font-size:11px;">(вы)</span>':''}</td><td data-label="Роль"><span class="badge ${m.role==='admin'?'status-mail':'status-default'}">${ROLE_LABELS[m.role]||escapeHtml(m.role)}</span></td><td data-label="Логин" style="font-size:12px;color:var(--gray);">${escapeHtml(m.login||'—')}</td><td data-label="Контакты" style="font-size:12px;color:var(--gray);">${escapeHtml(m.phone||'')} ${escapeHtml(m.email||'')}</td><td data-label="Клиентов">${cnt}</td><td data-label="Статус">${statusHtml}</td><td data-label="Telegram">${tgHtml}</td></tr>`;
+  }).join('') : `<tr><td colspan="8"><div class="empty-state">Нет менеджеров</div></td></tr>`;
 }
 
 // ── TELEGRAM: привязка личного аккаунта ──
@@ -1643,11 +1651,14 @@ async function addManager(){
   const phone = $('managerPhone').value.trim() || null;
   const email = $('managerEmail').value.trim() || null;
   const role = $('managerRole').value;
+  const login = $('managerLogin').value.trim();
+  const password = $('managerPassword').value.trim();
   if(!manager_id || !name){ toast('ID и имя обязательны','error'); return; }
-  const r = await api('POST','/managers',{manager_id,name,phone,email,role});
+  if(!login || !password){ toast('Логин и пароль обязательны','error'); return; }
+  const r = await api('POST','/managers',{manager_id,name,phone,email,role,login,password});
   if(r && !r.error){
     toast('Менеджер добавлен'); closeModal('addManager');
-    ['managerId','managerName','managerPhone','managerEmail'].forEach(id=>$(id).value='');
+    ['managerId','managerName','managerPhone','managerEmail','managerLogin','managerPassword'].forEach(id=>$(id).value='');
     ensureManagers(true).then(loadManagers);
   } else toast(r?.error || 'Ошибка','error');
 }
@@ -2091,33 +2102,39 @@ let currentManagerId = null;  // id реального аккаунта в manag
 let currentManagerName = null;
 let heartbeatTimer = null;
 
+let pendingRole = null;
+
 function enterAs(role) {
+  pendingRole = role;
   document.getElementById('roleScreen').style.display = 'none';
-  showIdentityScreen(role);
+  document.getElementById('identityTitle').textContent = role === 'manager' ? 'Вход для менеджера' : 'Вход для клинера';
+  document.getElementById('authLogin').value = '';
+  document.getElementById('authPassword').value = '';
+  const err = document.getElementById('authError');
+  err.style.display = 'none'; err.textContent = '';
+  document.getElementById('identityScreen').style.display = 'flex';
+  setTimeout(() => document.getElementById('authLogin').focus(), 50);
 }
 
-async function showIdentityScreen(role) {
-  const list = document.getElementById('identityList');
-  const empty = document.getElementById('identityEmpty');
-  list.innerHTML = '<div style="color:#6B7280;font-size:13px;text-align:center;">Загрузка…</div>';
-  empty.style.display = 'none';
-  document.getElementById('identityScreen').style.display = 'flex';
-
-  const managers = (await api('GET', '/managers')) || [];
-  const filtered = managers.filter(m => m.role === role);
-  if (!filtered.length) {
-    list.innerHTML = '';
-    empty.style.display = 'block';
+async function submitLogin() {
+  const login = document.getElementById('authLogin').value.trim();
+  const password = document.getElementById('authPassword').value;
+  const err = document.getElementById('authError');
+  err.style.display = 'none'; err.textContent = '';
+  if (!login || !password) {
+    err.textContent = 'Введите логин и пароль'; err.style.display = 'block';
     return;
   }
-  list.innerHTML = filtered.map(m => `
-    <button onclick="selectIdentity(${m.manager_id}, '${escapeHtml(m.name).replace(/'/g, "\\'")}', '${role}')" style="
-      width:100%;padding:14px 18px;border:1.5px solid #242430;border-radius:12px;background:#111118;
-      color:#F9FAFB;font-size:15px;font-weight:600;cursor:pointer;font-family:inherit;text-align:left;
-      display:flex;align-items:center;justify-content:space-between;transition:border-color .15s;
-    " onmouseover="this.style.borderColor='#6D28D9'" onmouseout="this.style.borderColor='#242430'">
-      ${escapeHtml(m.name)} <span style="font-size:11px;color:#6B7280;">#${m.manager_id}</span>
-    </button>`).join('');
+  const r = await api('POST', '/auth/login', { login, password });
+  if (!r || r.error) {
+    err.textContent = (r && r.error) || 'Не удалось войти'; err.style.display = 'block';
+    return;
+  }
+  if (r.role !== pendingRole) {
+    err.textContent = 'У этого аккаунта другая роль'; err.style.display = 'block';
+    return;
+  }
+  selectIdentity(r.manager_id, r.name, r.role);
 }
 
 function selectIdentity(managerId, managerName, role) {

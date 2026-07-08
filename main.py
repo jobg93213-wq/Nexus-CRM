@@ -58,6 +58,8 @@ class ManagerDB(Base):
     active           = Column(Boolean, default=True)
     last_seen        = Column(DateTime, nullable=True)   # для реального статуса онлайн/оффлайн
     telegram_chat_id = Column(String, nullable=True)     # привязанный telegram-чат клинера/менеджера
+    login            = Column(String, unique=True, nullable=True)  # логин для входа
+    password         = Column(String, nullable=True)               # пароль для входа (простое хранение)
 
 class LeadDB(Base):
     __tablename__ = "leads"
@@ -318,6 +320,16 @@ def run_migrations():
                 conn.execute(text("ALTER TABLE managers ADD COLUMN telegram_chat_id VARCHAR"))
             except Exception:
                 pass
+        if "login" not in mgr_cols:
+            try:
+                conn.execute(text("ALTER TABLE managers ADD COLUMN login VARCHAR"))
+            except Exception:
+                pass
+        if "password" not in mgr_cols:
+            try:
+                conn.execute(text("ALTER TABLE managers ADD COLUMN password VARCHAR"))
+            except Exception:
+                pass
 
         # Добавляем этап "Новая заявка" в воронку юр. лиц, чтобы заявки
         # из почты сразу были видны на канбане (а не только в списке лидов)
@@ -390,15 +402,33 @@ def seed_data():
 
         if not db.query(ManagerDB).filter(ManagerDB.role == "manager").first():
             next_id = (db.query(func.max(ManagerDB.manager_id)).scalar() or 0) + 1
-            db.add(ManagerDB(manager_id=next_id, name="Менеджер 1", phone=None, email=None, role="manager", active=True))
+            db.add(ManagerDB(manager_id=next_id, name="Менеджер 1", phone=None, email=None, role="manager", active=True,
+                              login="Manager1", password="ManagerCRM100"))
             db.commit()
             print("[seed] создан менеджер по умолчанию")
 
         if not db.query(ManagerDB).filter(ManagerDB.role == "cleaner").first():
             next_id = (db.query(func.max(ManagerDB.manager_id)).scalar() or 0) + 1
-            db.add(ManagerDB(manager_id=next_id, name="Клинер 1", phone=None, email=None, role="cleaner", active=True))
+            db.add(ManagerDB(manager_id=next_id, name="Клинер 1", phone=None, email=None, role="cleaner", active=True,
+                              login="Cleaner1", password="CleanerCRM100"))
             db.commit()
             print("[seed] создан клинер по умолчанию")
+
+        # Простая авторизация: гарантируем, что у существующих аккаунтов менеджера/клинера
+        # (созданных до появления логина/пароля) есть логин и пароль по умолчанию
+        if not db.query(ManagerDB).filter(ManagerDB.login == "Manager1").first():
+            m = db.query(ManagerDB).filter(ManagerDB.role == "manager", ManagerDB.login.is_(None)).first()
+            if m:
+                m.login = "Manager1"; m.password = "ManagerCRM100"
+                db.commit()
+                print("[seed] логин/пароль назначены существующему менеджеру")
+
+        if not db.query(ManagerDB).filter(ManagerDB.login == "Cleaner1").first():
+            c = db.query(ManagerDB).filter(ManagerDB.role == "cleaner", ManagerDB.login.is_(None)).first()
+            if c:
+                c.login = "Cleaner1"; c.password = "CleanerCRM100"
+                db.commit()
+                print("[seed] логин/пароль назначены существующему клинеру")
 
         if db.query(LossReasonDB).count() == 0:
             for r in DEFAULT_REASONS:
@@ -536,6 +566,8 @@ class Manager(BaseModel):
     phone:      Optional[str] = None
     email:      Optional[str] = None
     role:       str = "manager"
+    login:      Optional[str] = None
+    password:   Optional[str] = None
 
 class ManagerUpdate(BaseModel):
     name:    Optional[str] = None
@@ -543,6 +575,12 @@ class ManagerUpdate(BaseModel):
     email:   Optional[str] = None
     role:    Optional[str] = None
     active:  Optional[bool] = None
+    login:   Optional[str] = None
+    password: Optional[str] = None
+
+class LoginRequest(BaseModel):
+    login:    str
+    password: str
 
 class StageHistory(BaseModel):
     phone:      str
@@ -1679,6 +1717,7 @@ def _manager_to_dict(m: ManagerDB) -> dict:
         "online": _is_online(m),
         "last_seen": m.last_seen.isoformat() if m.last_seen else None,
         "telegram_linked": bool(m.telegram_chat_id),
+        "login": m.login,
     }
 
 @app.get("/managers")
@@ -1693,8 +1732,25 @@ def list_managers(db: Session = Depends(get_db), include_inactive: bool = False)
 def create_manager(m: Manager, db: Session = Depends(get_db)):
     if db.query(ManagerDB).filter(ManagerDB.manager_id == m.manager_id).first():
         return {"error": "ID занят"}
+    if m.login:
+        if db.query(ManagerDB).filter(ManagerDB.login == m.login).first():
+            return {"error": "Такой логин уже занят"}
+    else:
+        return {"error": "Укажите логин"}
+    if not m.password:
+        return {"error": "Укажите пароль"}
     db.add(ManagerDB(**m.model_dump())); db.commit()
     return {"message": "Менеджер создан"}
+
+@app.post("/auth/login")
+def auth_login(payload: LoginRequest, db: Session = Depends(get_db)):
+    """Простая авторизация по логину/паролю. Роль определяется учётной записью,
+    так что менеджерам и клинерам не нужно её выбирать отдельно — она приходит в ответе."""
+    login = (payload.login or "").strip()
+    m = db.query(ManagerDB).filter(ManagerDB.login == login).first()
+    if not m or not m.active or not m.password or m.password != payload.password:
+        return JSONResponse(status_code=401, content={"error": "Неверный логин или пароль"})
+    return _manager_to_dict(m)
 
 @app.post("/managers/{manager_id}/heartbeat")
 def manager_heartbeat(manager_id: int, db: Session = Depends(get_db)):
@@ -1711,7 +1767,10 @@ def manager_heartbeat(manager_id: int, db: Session = Depends(get_db)):
 def update_manager(manager_id: int, payload: ManagerUpdate, db: Session = Depends(get_db)):
     m = db.query(ManagerDB).filter(ManagerDB.manager_id == manager_id).first()
     if not m: return {"error": "Не найден"}
-    for f in ("name", "phone", "email", "role"):
+    if payload.login is not None and payload.login != m.login:
+        if db.query(ManagerDB).filter(ManagerDB.login == payload.login, ManagerDB.manager_id != manager_id).first():
+            return {"error": "Такой логин уже занят"}
+    for f in ("name", "phone", "email", "role", "login", "password"):
         v = getattr(payload, f)
         if v is not None: setattr(m, f, _clean(v) or v)
     if payload.active is not None: m.active = payload.active

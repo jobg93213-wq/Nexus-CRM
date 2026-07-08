@@ -470,10 +470,16 @@ def _auto_setup_telegram_webhook():
 
 @app.on_event("startup")
 def _start_email_poll_thread():
-    """Запускаем фоновый поток опроса подключённых почтовых ящиков по IMAP."""
-    t = threading.Thread(target=_email_poll_loop, daemon=True)
-    t.start()
-    print("[email] фоновый опрос почты запущен")
+    """Запускаем IMAP IDLE-потоки для каждого активного ящика + watchdog."""
+    # watchdog: раз в минуту проверяет, живы ли потоки, и перезапускает упавшие
+    t_watchdog = threading.Thread(target=_email_poll_loop, daemon=True, name="imap-watchdog")
+    t_watchdog.start()
+    # немедленно поднимаем IDLE-потоки, не ждя первый тик watchdog
+    try:
+        _ensure_idle_threads()
+    except Exception as e:
+        print(f"[email-idle] ошибка при старте: {e}")
+    print("[email-idle] IMAP IDLE запущен (push-режим)")
 
 # ─────────── SCHEMAS ───────────
 
@@ -865,11 +871,14 @@ def _poll_email_account(account_id: int) -> int:
                         pipeline = db.query(PipelineDB).filter(PipelineDB.pipeline_id == acc.pipeline_id).first()
                         stages = pipeline.stages.split("|") if pipeline else []
                         status_val = "Новая заявка" if "Новая заявка" in stages else (stages[0] if stages else "Новая заявка")
+                        # Имя и email берём от отправителя письма, а не от ящика-получателя
+                        lead_name = from_name or from_addr or acc.name or acc.email
+                        lead_email = from_addr or None
                         lead = LeadDB(
-                            name=acc.name or acc.email,
+                            name=lead_name,
                             phone=phone_placeholder,
                             status=status_val,
-                            email=acc.email,
+                            email=lead_email,
                             pipeline_id=acc.pipeline_id,
                             client_type=acc.client_type or "юр",
                             source="Email",
@@ -911,16 +920,154 @@ def _poll_email_account(account_id: int) -> int:
                     pass
     return created
 
+def _idle_watch_account(account_id: int):
+    """
+    Фоновый поток для одного ящика.
+    Использует IMAP IDLE (RFC 2177): сервер сам присылает EXISTS/RECENT
+    при новом письме — реагируем мгновенно, без периодического опроса.
+    При любой ошибке ждём IDLE_RECONNECT_SECONDS и переподключаемся.
+    """
+    IDLE_TIMEOUT   = int(os.getenv("IMAP_IDLE_TIMEOUT",   "1200"))  # 20 мин — обновляем IDLE до истечения 30 мин
+    RECONNECT_WAIT = int(os.getenv("IDLE_RECONNECT_SECONDS", "30"))
+
+    while True:
+        conn = None
+        try:
+            with SessionLocal() as db:
+                acc = db.query(EmailAccountDB).filter(EmailAccountDB.id == account_id).first()
+                if not acc or not acc.active or not acc.password:
+                    time.sleep(RECONNECT_WAIT)
+                    continue
+
+            conn = _imap_connect(acc)
+            conn.select("INBOX")
+
+            # ── baseline при первом подключении ──────────────────────────
+            with SessionLocal() as db:
+                acc = db.query(EmailAccountDB).filter(EmailAccountDB.id == account_id).first()
+                if acc.last_uid is None:
+                    status, data = conn.uid("search", None, "ALL")
+                    uids = [int(u) for u in data[0].split()] if data and data[0] else []
+                    acc.last_uid = max(uids) if uids else 0
+                    acc.last_checked = datetime.utcnow()
+                    acc.last_error = None
+                    db.commit()
+                    print(f"[email-idle] baseline {acc.email}: last_uid={acc.last_uid}")
+
+            print(f"[email-idle] IDLE запущен для {acc.email}")
+
+            idle_start = time.monotonic()
+            # Отправляем команду IDLE
+            tag = conn._new_tag()
+            conn.send(tag + b" IDLE\r\n")
+            resp = conn.readline()                       # ожидаем "+ idling"
+            if not resp.startswith(b"+"):
+                raise Exception(f"Сервер не поддерживает IDLE: {resp!r}")
+
+            while True:
+                elapsed = time.monotonic() - idle_start
+                remaining = IDLE_TIMEOUT - elapsed
+                if remaining <= 0:
+                    # Обновляем IDLE — отправляем DONE и снова IDLE
+                    conn.send(b"DONE\r\n")
+                    # читаем ответ OK на предыдущий IDLE
+                    while True:
+                        line = conn.readline()
+                        if tag in line or b"OK" in line or b"BAD" in line or b"NO" in line:
+                            break
+                    tag = conn._new_tag()
+                    conn.send(tag + b" IDLE\r\n")
+                    conn.readline()                     # "+ idling"
+                    idle_start = time.monotonic()
+                    continue
+
+                # Ждём данных от сервера (неблокирующий select)
+                import select as _select
+                rlist, _, _ = _select.select([conn.socket()], [], [], min(remaining, 60))
+                if not rlist:
+                    continue                            # таймаут select, продолжаем ждать
+
+                # Читаем строку-событие
+                line = conn.readline()
+                if not line:
+                    raise Exception("Сервер закрыл соединение")
+
+                # EXISTS или RECENT = пришло новое письмо
+                if b"EXISTS" in line or b"RECENT" in line:
+                    print(f"[email-idle] {acc.email} — новое письмо ({line.strip()!r}), обрабатываем")
+                    # Выходим из IDLE
+                    conn.send(b"DONE\r\n")
+                    while True:
+                        done_line = conn.readline()
+                        if tag in done_line or b"OK" in done_line or b"BAD" in done_line:
+                            break
+
+                    # Обрабатываем новые письма
+                    created = _poll_email_account(account_id)
+                    if created:
+                        print(f"[email-idle] {acc.email} — создано {created} лид(ов)")
+
+                    # Возвращаемся в IDLE
+                    tag = conn._new_tag()
+                    conn.send(tag + b" IDLE\r\n")
+                    conn.readline()
+                    idle_start = time.monotonic()
+
+        except Exception as e:
+            print(f"[email-idle] ошибка ({acc.email if 'acc' in dir() else account_id}): {e} — reconnect через {RECONNECT_WAIT}s")
+            try:
+                with SessionLocal() as db:
+                    a = db.query(EmailAccountDB).filter(EmailAccountDB.id == account_id).first()
+                    if a:
+                        a.last_error = str(e)
+                        a.last_checked = datetime.utcnow()
+                        db.commit()
+            except Exception:
+                pass
+            time.sleep(RECONNECT_WAIT)
+        finally:
+            if conn is not None:
+                try:
+                    conn.logout()
+                except Exception:
+                    pass
+
+
+# Реестр запущенных потоков IDLE: account_id -> Thread
+_idle_threads: dict = {}
+_idle_lock = threading.Lock()
+
+
+def _ensure_idle_threads():
+    """
+    Запускает IDLE-поток для каждого активного ящика, которого ещё нет в реестре.
+    Вызывается при старте и при изменении списка аккаунтов.
+    """
+    with SessionLocal() as db:
+        accounts = db.query(EmailAccountDB).filter(EmailAccountDB.active == True).all()
+        ids = [a.id for a in accounts]
+
+    with _idle_lock:
+        for aid in ids:
+            if aid not in _idle_threads or not _idle_threads[aid].is_alive():
+                t = threading.Thread(target=_idle_watch_account, args=(aid,), daemon=True,
+                                     name=f"imap-idle-{aid}")
+                t.start()
+                _idle_threads[aid] = t
+                print(f"[email-idle] поток запущен для account_id={aid}")
+
+
 def _email_poll_loop():
+    """
+    Оставлено как fallback для серверов без IDLE.
+    Также служит watchdog — каждые EMAIL_POLL_SECONDS перезапускает упавшие потоки.
+    """
     interval = int(os.getenv("EMAIL_POLL_SECONDS", "60"))
     while True:
         try:
-            with SessionLocal() as db:
-                ids = [a.id for a in db.query(EmailAccountDB).filter(EmailAccountDB.active == True).all()]
-            for aid in ids:
-                _poll_email_account(aid)
+            _ensure_idle_threads()
         except Exception as e:
-            print(f"[email] ошибка цикла опроса почты: {e}")
+            print(f"[email] watchdog ошибка: {e}")
         time.sleep(interval)
 
 def _email_account_to_dict(a: "EmailAccountDB"):
@@ -1622,6 +1769,8 @@ def create_email_account(payload: EmailAccountIn, db: Session = Depends(get_db))
         active=payload.active, last_uid=None,
     )
     db.add(a); db.commit(); db.refresh(a)
+    if a.active:
+        threading.Thread(target=_ensure_idle_threads, daemon=True).start()
     return {"message": "Почтовый ящик добавлен", "data": _email_account_to_dict(a)}
 
 @app.put("/email-accounts/{account_id}")
@@ -1636,6 +1785,8 @@ def update_email_account(account_id: int, payload: EmailAccountUpdate, db: Sessi
     for k, v in data.items():
         setattr(a, k, v)
     db.commit()
+    # если ящик активирован — запускаем IDLE-поток немедленно
+    threading.Thread(target=_ensure_idle_threads, daemon=True).start()
     return {"message": "Сохранено", "data": _email_account_to_dict(a)}
 
 @app.delete("/email-accounts/{account_id}")

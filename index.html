@@ -670,6 +670,27 @@
         </div>
       </div>
 
+      <div class="card" style="margin-bottom:20px;">
+        <div class="card-header">
+          <div class="card-title">
+            <svg fill="none" stroke="#229ED9" viewBox="0 0 24 24" style="width:16px;height:16px;"><path stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" d="M12 20l9-5-9-5-9 5 9 5zM12 4l9 5-9 5-9-5 9-5z"/></svg>
+            Telegram-бот — уведомления о новых заявках
+          </div>
+          <span id="tgStatusBadge" style="font-size:11px;color:var(--gray);">не настроен</span>
+        </div>
+        <div class="card-body">
+          <p style="font-size:12px;color:var(--gray-light);margin-bottom:12px;line-height:1.6;">Укажите токен бота (получить у <code style="background:var(--surface2);padding:1px 5px;border-radius:4px;color:var(--purple-bright);">@BotFather</code>) — CRM будет присылать в чат сообщение о каждой новой заявке: имя, телефон и источник.</p>
+          <div class="form-row"><label class="form-label">Токен бота</label><input type="text" class="form-input" id="tgBotToken" placeholder="123456789:AAExampleTokenHere" /></div>
+          <div class="form-row col-2">
+            <div><label class="form-label">Chat ID для уведомлений</label><input type="text" class="form-input" id="tgChatId" placeholder="напр. 123456789" /></div>
+            <div style="display:flex;align-items:flex-end;"><button class="btn btn-ghost" style="width:100%;" onclick="detectTgChatId()">Определить chat_id</button></div>
+          </div>
+          <p style="font-size:11px;color:var(--gray);margin:2px 0 14px;line-height:1.6;">Как узнать chat_id: сохраните токен, напишите боту любое сообщение в личку (или добавьте его в группу и напишите там что-нибудь), затем нажмите «Определить chat_id».</p>
+          <button class="btn btn-primary btn-sm" onclick="saveTgSettings()">Сохранить</button>
+          <button class="btn btn-ghost btn-sm" onclick="testTgSettings()">Отправить тестовое сообщение</button>
+        </div>
+      </div>
+
       <div class="integ-grid">
         <div class="integ-card">
           <div class="integ-card-head">
@@ -723,7 +744,7 @@
           <p style="font-size:12px;color:var(--gray-light);line-height:1.6;">Когда у лида появляется статус «Выезд на объект», все подключённые клинеры получают сообщение в Telegram с кнопкой «✅ Взять в работу» — заявку можно забрать прямо из чата.</p>
           <ol class="integ-steps">
             <li>Создайте бота в <code>@BotFather</code>, получите токен</li>
-            <li>Укажите его в переменной окружения <code>TELEGRAM_BOT_TOKEN</code> на сервере</li>
+            <li>Укажите токен в карточке «Telegram-бот» выше (или переменной окружения <code>TELEGRAM_BOT_TOKEN</code>)</li>
             <li>Настройте вебхук на адрес <code id="tgWebhookUrl">__BASE__/telegram/webhook</code> (автоматически, если задать <code>PUBLIC_URL</code>, либо вручную: <code>POST /telegram/setup-webhook?base_url=...</code>)</li>
             <li>Каждый клинер/менеджер жмёт «Подключить» в разделе «Менеджеры» напротив своего имени и переходит по ссылке в Telegram</li>
           </ol>
@@ -734,9 +755,15 @@
             <div class="integ-icon" style="background:rgba(34,158,217,.10);">
               <svg fill="none" stroke="#229ED9" viewBox="0 0 24 24"><path stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2"/></svg>
             </div>
-            <div><div class="integ-name">Telegram-бот для заявок с сайта</div><div class="integ-desc">Заявки через Telegram</div></div>
+            <div><div class="integ-name">Telegram-бот для клиентов</div><div class="integ-desc">/start → полная воронка заявок</div></div>
           </div>
-          <p style="font-size:12px;color:var(--gray-light);line-height:1.6;">Тот же бот может принимать сообщения от клиентов и создавать лиды — в хендлере вызывайте <code>POST /leads</code>.</p>
+          <p style="font-size:12px;color:var(--gray-light);line-height:1.6;">Тот же бот (токен указан выше) полностью ведёт диалог с клиентом:</p>
+          <ol class="integ-steps">
+            <li>🧹 «Заказать уборку» — подробная анкета (объект, вид уборки, площадь, срок, адрес, телефон, имя) → лид падает в нужную воронку (физ/юр — по типу объекта)</li>
+            <li>📞 «Заказать звонок» — быстрая заявка: имя, фамилия, телефон → лид в CRM</li>
+            <li>💬 «Связаться с менеджером» — свободный вопрос уходит в чат уведомлений (см. выше); ответ менеджера (Reply на сообщение) автоматически возвращается клиенту</li>
+          </ol>
+          <p style="font-size:11px;color:var(--gray);margin-top:8px;">Работает сразу после того, как выше сохранён токен и настроен вебхук — ничего дополнительно устанавливать не нужно.</p>
         </div>
 
         <div class="integ-card">
@@ -1959,6 +1986,32 @@ async function loadIntegrations(){
   $('curlSnippet').textContent = `curl -X POST ${API}/leads \\\n  -H "Content-Type: application/json" \\\n  -d '{\n    "name":"Иван",\n    "phone":"+79991234567",\n    "pipeline_id":1,\n    "client_type":"физ",\n    "source":"Сайт — кнопка «Заказать звонок»",\n    "telegram":"@ivan",\n    "whatsapp":"+79991234567"\n  }'`;
   const tgUrl = $('tgWebhookUrl'); if (tgUrl) tgUrl.textContent = `${API}/telegram/webhook`;
   loadEmailAccounts();
+  loadTgSettings();
+}
+async function loadTgSettings(){
+  const r = await api('GET','/settings/telegram');
+  if(!r) return;
+  $('tgBotToken').value = r.token || '';
+  $('tgChatId').value = r.chat_id || '';
+  const badge = $('tgStatusBadge');
+  if(r.token && r.chat_id){ badge.textContent = 'активно'; badge.style.color = 'var(--success)'; }
+  else if(r.token){ badge.textContent = 'токен есть, нет chat_id'; badge.style.color = '#F59E0B'; }
+  else { badge.textContent = 'не настроен'; badge.style.color = 'var(--gray)'; }
+}
+async function saveTgSettings(){
+  const token = $('tgBotToken').value.trim();
+  const chat_id = $('tgChatId').value.trim();
+  const r = await api('POST','/settings/telegram',{token, chat_id});
+  if(r && !r.error){ toast('Сохранено'); loadTgSettings(); } else toast(r?.error || 'Ошибка','error');
+}
+async function detectTgChatId(){
+  const r = await api('POST','/settings/telegram/detect-chat');
+  if(r && !r.error){ $('tgChatId').value = r.chat_id; toast('Chat ID найден: ' + (r.title || r.chat_id)); loadTgSettings(); }
+  else toast(r?.error || 'Не удалось определить chat_id','error');
+}
+async function testTgSettings(){
+  const r = await api('POST','/settings/telegram/test');
+  if(r && !r.error) toast('Тестовое сообщение отправлено'); else toast(r?.error || 'Ошибка','error');
 }
 async function regenToken(){
   if(!confirm('Пересоздать токен? Старый перестанет работать.')) return;

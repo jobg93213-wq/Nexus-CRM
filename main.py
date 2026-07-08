@@ -687,7 +687,39 @@ def _is_online(m: "ManagerDB") -> bool:
     return (datetime.utcnow() - m.last_seen).total_seconds() < ONLINE_THRESHOLD_SECONDS
 
 def _tg_token() -> str:
+    try:
+        with SessionLocal() as db:
+            s = db.get(SettingDB, "telegram_bot_token")
+            if s and s.value:
+                return s.value
+    except Exception:
+        pass
     return os.getenv("TELEGRAM_BOT_TOKEN", "")
+
+def _tg_notify_chat_id() -> str:
+    try:
+        with SessionLocal() as db:
+            s = db.get(SettingDB, "telegram_notify_chat_id")
+            if s and s.value:
+                return s.value
+    except Exception:
+        pass
+    return os.getenv("TELEGRAM_CHAT_ID", "")
+
+def _notify_new_lead(name: str, phone: str, source: Optional[str] = None, comment: Optional[str] = None):
+    """Простое уведомление в Telegram-чат о новой заявке: имя, телефон, источник."""
+    chat_id = _tg_notify_chat_id()
+    if not chat_id or not _tg_token():
+        return
+    lines = [
+        "🆕 *Новая заявка*",
+        f"👤 Имя: {name or '—'}",
+        f"📞 Телефон: {phone or '—'}",
+        f"📍 Откуда: {source or '—'}",
+    ]
+    if comment:
+        lines.append(f"💬 {comment}")
+    _tg_send(chat_id, "\n".join(lines))
 
 def _tg_send(chat_id: str, text: str, reply_markup: dict = None):
     tg_token = _tg_token()
@@ -933,6 +965,7 @@ def _poll_email_account(account_id: int) -> int:
                         _log_activity(db, phone_placeholder, "lead_created",
                                       {"name": lead.name, "source": "Email", "subject": subject})
                         db.commit()
+                        _notify_new_lead(lead.name, phone_placeholder, "Email")
                         created += 1
                     max_uid = max(max_uid, uid)
                 except Exception as e:
@@ -1187,6 +1220,7 @@ def create_lead(lead: Lead, db: Session = Depends(get_db)):
     db.refresh(db_lead)
     _log_activity(db, lead.phone, "lead_created", {"name": lead.name, "source": lead.source}, lead.manager_id)
     db.commit()
+    _notify_new_lead(lead.name, lead.phone, lead.source)
     return {"message": "Лид успешно добавлен", "data": _lead_to_dict(db_lead, db)}
 
 # ─────────── LEADS LIST — с фильтрами/сортировкой/пагинацией ───────────
@@ -1916,6 +1950,79 @@ def regenerate_token(db: Session = Depends(get_db)):
     db.commit()
     return {"token": new}
 
+class TelegramSettings(BaseModel):
+    token:   Optional[str] = None
+    chat_id: Optional[str] = None
+
+def _set_setting(db: Session, key: str, value: Optional[str]):
+    s = db.get(SettingDB, key)
+    if s: s.value = value
+    else: db.add(SettingDB(key=key, value=value))
+
+@app.get("/settings/telegram")
+def get_telegram_settings(db: Session = Depends(get_db)):
+    token = db.get(SettingDB, "telegram_bot_token")
+    chat_id = db.get(SettingDB, "telegram_notify_chat_id")
+    return {"token": token.value if token else "", "chat_id": chat_id.value if chat_id else ""}
+
+@app.post("/settings/telegram")
+def save_telegram_settings(payload: TelegramSettings, db: Session = Depends(get_db)):
+    if payload.token is not None:
+        _set_setting(db, "telegram_bot_token", payload.token.strip() or None)
+    if payload.chat_id is not None:
+        _set_setting(db, "telegram_notify_chat_id", payload.chat_id.strip() or None)
+    db.commit()
+    # если задан PUBLIC_URL — сразу переподписываем вебхук на новый токен
+    public_url = os.getenv("PUBLIC_URL", "")
+    tg_token = _tg_token()
+    if tg_token and public_url:
+        try:
+            httpx.post(f"https://api.telegram.org/bot{tg_token}/setWebhook",
+                       json={"url": public_url.rstrip("/") + "/telegram/webhook"}, timeout=8)
+        except Exception:
+            pass
+    return {"message": "Сохранено"}
+
+@app.post("/settings/telegram/detect-chat")
+def detect_telegram_chat(db: Session = Depends(get_db)):
+    """Находит chat_id по последнему сообщению, отправленному боту (getUpdates).
+    Перед вызовом пользователь должен написать боту в личку или в группу."""
+    tg_token = _tg_token()
+    if not tg_token:
+        return {"error": "Сначала укажите и сохраните токен бота"}
+    try:
+        r = httpx.get(f"https://api.telegram.org/bot{tg_token}/getUpdates", timeout=8)
+        data = r.json()
+    except Exception as e:
+        return {"error": f"Не удалось связаться с Telegram: {e}"}
+    if not data.get("ok"):
+        return {"error": data.get("description", "Ошибка Telegram API")}
+    updates = data.get("result", [])
+    if not updates:
+        return {"error": "Нет новых сообщений боту. Напишите боту что-нибудь в Telegram и попробуйте снова."}
+    last = updates[-1]
+    msg = last.get("message") or last.get("channel_post") or {}
+    chat = msg.get("chat", {})
+    chat_id = chat.get("id")
+    if not chat_id:
+        return {"error": "Не удалось определить chat_id из последнего сообщения"}
+    _set_setting(db, "telegram_notify_chat_id", str(chat_id))
+    db.commit()
+    title = chat.get("title") or " ".join(filter(None, [chat.get("first_name"), chat.get("last_name")])) or chat.get("username") or str(chat_id)
+    return {"chat_id": str(chat_id), "title": title}
+
+@app.post("/settings/telegram/test")
+def test_telegram_notification(db: Session = Depends(get_db)):
+    chat_id = _tg_notify_chat_id()
+    if not _tg_token():
+        return {"error": "Сначала укажите токен бота"}
+    if not chat_id:
+        return {"error": "Сначала укажите или определите chat_id"}
+    res = _tg_send(chat_id, "🆕 *Новая заявка*\n👤 Имя: Егор\n📞 Телефон: +49838\n📍 Откуда: Тест из CRM")
+    if res and res.get("ok"):
+        return {"message": "Отправлено"}
+    return {"error": (res or {}).get("description", "Не удалось отправить сообщение")}
+
 # ─────────── PUBLIC ───────────
 
 class PublicLead(BaseModel):
@@ -1965,7 +2072,286 @@ async def public_create(request: Request, db: Session = Depends(get_db)):
     _log_activity(db, phone, "lead_created", {"source": source, "public": True})
     db.commit()
     send_fcm_push(name, phone)
+    _notify_new_lead(name, phone, source)
     return {"message": "Заявка принята", "status": status}
+
+# ─────────── TELEGRAM-БОТ ДЛЯ КЛИЕНТОВ: СЦЕНАРИЙ ───────────
+# Полный клиентский сценарий (как в отдельном боте cleanfloor_bot.py), встроенный
+# прямо в вебхук CRM — работает на том же токене/боте, что и уведомления клинерам.
+#
+# /start -> 3 кнопки:
+#   🧹 Заказать уборку        -> подробная анкета -> лид в CRM (пайплайн физ/юр по типу объекта)
+#   📞 Заказать звонок        -> имя, фамилия, телефон -> лид в CRM
+#   💬 Связаться с менеджером -> свободный вопрос -> уходит в чат уведомлений (Настройки -> Telegram),
+#                                 менеджер отвечает Reply-сообщением, ответ уходит клиенту
+
+BOT_SOURCE_CLEANING = "Telegram-бот — Заказать уборку"
+BOT_SOURCE_CALL = "Telegram-бот — Заказать звонок"
+
+# Состояние диалога на чат: {chat_id: {"state": "...", "data": {...}}}
+# Хранится в памяти процесса (как MemoryStorage у aiogram) — сценарий начинается заново после рестарта.
+_bot_sessions: dict = {}
+
+# message_id уведомления в чате менеджера -> chat_id клиента, задавшего вопрос
+_pending_questions: dict = {}
+
+BOT_OBJECT_TYPES = {
+    "obj:flat": "Квартира",
+    "obj:house": "Дом",
+    "obj:office": "Офис",
+    "obj:shop": "Магазин",
+    "obj:industrial": "Производственное помещение",
+}
+BOT_OBJECT_TO_CLIENT_TYPE = {
+    "obj:flat": "физ", "obj:house": "физ",
+    "obj:office": "юр", "obj:shop": "юр", "obj:industrial": "юр",
+}
+BOT_CLEANING_TYPES = {
+    "clean:support": "Поддерживающая уборка",
+    "clean:general": "Генеральная уборка",
+    "clean:after_repair": "После ремонта",
+    "clean:windows": "Мытье окон",
+    "clean:furniture": "Химчистка мебели",
+    "clean:other": "Другое",
+}
+BOT_AREAS = {
+    "area:lt50": "До 50 м²", "area:50_100": "50–100 м²",
+    "area:100_200": "100–200 м²", "area:gt200": "Более 200 м²",
+}
+BOT_WHEN_OPTIONS = {"when:today": "Сегодня", "when:tomorrow": "Завтра", "when:week": "На этой неделе"}
+
+def _bot_kb(options: dict) -> dict:
+    return {"inline_keyboard": [[{"text": text, "callback_data": key}] for key, text in options.items()]}
+
+def _bot_main_menu_kb() -> dict:
+    return {"inline_keyboard": [
+        [{"text": "🧹 Заказать уборку", "callback_data": "menu:cleaning"}],
+        [{"text": "📞 Заказать звонок", "callback_data": "menu:call"}],
+        [{"text": "💬 Связаться с менеджером", "callback_data": "menu:manager"}],
+    ]}
+
+def _bot_phone_kb() -> dict:
+    return {"keyboard": [[{"text": "📱 Отправить номер телефона", "request_contact": True}]],
+            "resize_keyboard": True, "one_time_keyboard": True}
+
+_BOT_REMOVE_KB = {"remove_keyboard": True}
+
+def _bot_is_valid_phone(txt: str) -> bool:
+    cleaned = re.sub(r"[^\d+]", "", txt or "")
+    return bool(re.fullmatch(r"(\+?375\d{9}|\+?7\d{10}|8\d{10})", cleaned))
+
+def _bot_get_session(chat_id: str) -> dict:
+    return _bot_sessions.setdefault(chat_id, {"state": None, "data": {}})
+
+def _bot_clear_session(chat_id: str):
+    _bot_sessions.pop(chat_id, None)
+
+def _bot_create_lead(db: Session, name: str, phone: str, source: str,
+                      client_type: str = "физ", comment: Optional[str] = None):
+    """Создаёт лид из бота-воронки (физ -> pipeline 1, юр -> pipeline 2).
+    Если номер уже есть в CRM — не дублирует лид, а добавляет заметку о повторном обращении."""
+    pipeline_id = 2 if client_type == "юр" else 1
+    existing = db.query(LeadDB).filter(LeadDB.phone == phone).first()
+    if existing:
+        note = f"Повторное обращение через Telegram-бота ({source})" + (f": {comment}" if comment else "")
+        db.add(NoteDB(phone=phone, text=note, note_type="system"))
+        _log_activity(db, phone, "note_added", {"source": source})
+        db.commit()
+        return existing
+    pipeline = db.query(PipelineDB).filter(PipelineDB.pipeline_id == pipeline_id).first()
+    status = pipeline.stages.split("|")[0] if pipeline else "Новый лид"
+    lead = LeadDB(name=name, phone=phone, status=status, pipeline_id=pipeline_id,
+                  client_type=client_type, source=source, comment=comment)
+    db.add(lead); db.commit(); db.refresh(lead)
+    _log_activity(db, phone, "lead_created", {"name": name, "source": source})
+    db.commit()
+    return lead
+
+async def _handle_client_bot_update(update: dict, db: Session) -> bool:
+    """Обрабатывает апдейт клиентского сценария бота. Возвращает True, если апдейт обработан."""
+    msg = update.get("message")
+    if msg:
+        chat_id = str(msg.get("chat", {}).get("id", ""))
+        text_in = (msg.get("text") or "").strip()
+        contact = msg.get("contact")
+        notify_chat = _tg_notify_chat_id()
+
+        # Ответ менеджера клиенту: менеджер отвечает (Reply) в чате уведомлений на вопрос клиента
+        if notify_chat and chat_id == str(notify_chat) and msg.get("reply_to_message"):
+            original_id = msg["reply_to_message"].get("message_id")
+            client_chat_id = _pending_questions.get(original_id)
+            if client_chat_id and text_in:
+                _tg_send(client_chat_id, f"Ответ менеджера: {text_in}")
+                _tg_send(chat_id, "✅ Ответ отправлен клиенту.")
+                _pending_questions.pop(original_id, None)
+                return True
+
+        if text_in.startswith("/start"):
+            # /start <manager_id> обрабатывается отдельно (привязка аккаунта менеджера/клинера) — см. ниже
+            parts = text_in.split(maxsplit=1)
+            if len(parts) == 2 and parts[1].strip().isdigit():
+                return False
+            _bot_clear_session(chat_id)
+            _tg_send(chat_id,
+                     "Здравствуйте! Мы профессионально выполняем уборку квартир, домов, офисов "
+                     "и коммерческих помещений.\n\n"
+                     "✅ Работаем без выходных\n"
+                     "✅ Используем профессиональную химию и оборудование\n"
+                     "✅ Гарантируем качество уборки\n\n"
+                     "Выберите, что вас интересует:",
+                     reply_markup=_bot_main_menu_kb())
+            return True
+
+        session = _bot_sessions.get(chat_id)
+        state = session.get("state") if session else None
+        if not state:
+            return False  # не в клиентском сценарии — не обрабатываем (могло быть иное сообщение)
+        data = session["data"]
+
+        if state == "cleaning:cleaning_type_custom":
+            data["cleaning_type"] = text_in
+            session["state"] = "cleaning:area"
+            _tg_send(chat_id, "Какая площадь помещения?", reply_markup=_bot_kb(BOT_AREAS))
+            return True
+
+        if state == "cleaning:address":
+            data["address"] = text_in
+            session["state"] = "cleaning:phone"
+            _tg_send(chat_id, "Оставьте номер телефона (или отправьте его кнопкой ниже):",
+                     reply_markup=_bot_phone_kb())
+            return True
+
+        if state == "cleaning:phone":
+            phone = contact.get("phone_number") if contact else text_in
+            if not contact and not _bot_is_valid_phone(phone):
+                _tg_send(chat_id, "Похоже, это не номер телефона. Введите номер полностью, "
+                                   "например: +375291234567, или отправьте его кнопкой ниже.",
+                         reply_markup=_bot_phone_kb())
+                return True
+            data["phone"] = phone
+            session["state"] = "cleaning:name"
+            _tg_send(chat_id, "Оставьте имя и фамилию:", reply_markup=_BOT_REMOVE_KB)
+            return True
+
+        if state == "cleaning:name":
+            full_name = text_in
+            client_type = data.get("client_type", "физ")
+            comment = (
+                f"Объект: {data.get('object_type')}; Вид уборки: {data.get('cleaning_type')}; "
+                f"Площадь: {data.get('area')}; Когда: {data.get('when')}; Адрес/район: {data.get('address')}"
+            )
+            _bot_create_lead(db, full_name, data.get("phone", ""), BOT_SOURCE_CLEANING,
+                              client_type=client_type, comment=comment)
+            _notify_new_lead(full_name, data.get("phone", ""), BOT_SOURCE_CLEANING, comment)
+            _tg_send(chat_id, "Спасибо! Ваша заявка принята. В ближайшее время с вами свяжется менеджер.")
+            _tg_send(chat_id, "Чтобы вернуться в меню — введите /start")
+            _bot_clear_session(chat_id)
+            return True
+
+        if state == "call:name":
+            data["name"] = text_in
+            session["state"] = "call:surname"
+            _tg_send(chat_id, "Введите вашу фамилию:")
+            return True
+
+        if state == "call:surname":
+            data["surname"] = text_in
+            session["state"] = "call:phone"
+            _tg_send(chat_id, "Введите ваш номер телефона (или отправьте его кнопкой ниже):",
+                     reply_markup=_bot_phone_kb())
+            return True
+
+        if state == "call:phone":
+            phone = contact.get("phone_number") if contact else text_in
+            if not contact and not _bot_is_valid_phone(phone):
+                _tg_send(chat_id, "Похоже, это не номер телефона. Введите номер полностью, "
+                                   "например: +375291234567, или отправьте его кнопкой ниже.",
+                         reply_markup=_bot_phone_kb())
+                return True
+            full_name = f"{data.get('name', '')} {data.get('surname', '')}".strip()
+            _bot_create_lead(db, full_name, phone, BOT_SOURCE_CALL)
+            _notify_new_lead(full_name, phone, BOT_SOURCE_CALL)
+            _tg_send(chat_id, "Спасибо! Ваша заявка принята. В ближайшее время с вами свяжется менеджер.",
+                     reply_markup=_BOT_REMOVE_KB)
+            _tg_send(chat_id, "Чтобы вернуться в меню — введите /start")
+            _bot_clear_session(chat_id)
+            return True
+
+        if state == "question:question":
+            _bot_clear_session(chat_id)
+            if notify_chat:
+                res = _tg_send(notify_chat, f"❗️Вопрос от клиента (chat {chat_id})\n\n{text_in}\n\n"
+                                              "👉 Чтобы ответить клиенту — ответьте (Reply) на это сообщение.")
+                if res and res.get("ok"):
+                    _pending_questions[res["result"]["message_id"]] = chat_id
+            _tg_send(chat_id, "Спасибо за ваш вопрос! Мы ответим вам как можно скорее.")
+            return True
+
+        return False
+
+    cq = update.get("callback_query")
+    if cq:
+        data_str = cq.get("data", "")
+        cq_id = cq.get("id")
+        chat_id = str(cq.get("message", {}).get("chat", {}).get("id", ""))
+
+        if data_str == "menu:cleaning":
+            session = _bot_get_session(chat_id); session["state"] = "cleaning:object_type"; session["data"] = {}
+            _tg_answer_callback(cq_id, "")
+            _tg_send(chat_id, "Какой объект необходимо убрать?", reply_markup=_bot_kb(BOT_OBJECT_TYPES))
+            return True
+
+        if data_str == "menu:call":
+            session = _bot_get_session(chat_id); session["state"] = "call:name"; session["data"] = {}
+            _tg_answer_callback(cq_id, "")
+            _tg_send(chat_id, "Введите ваше имя:")
+            return True
+
+        if data_str == "menu:manager":
+            session = _bot_get_session(chat_id); session["state"] = "question:question"; session["data"] = {}
+            _tg_answer_callback(cq_id, "")
+            _tg_send(chat_id, "Напишите ваш вопрос, а мы ответим на него как можно быстрее.")
+            return True
+
+        session = _bot_sessions.get(chat_id)
+        state = session.get("state") if session else None
+
+        if state == "cleaning:object_type" and data_str.startswith("obj:") and data_str in BOT_OBJECT_TYPES:
+            session["data"]["object_type"] = BOT_OBJECT_TYPES[data_str]
+            session["data"]["client_type"] = BOT_OBJECT_TO_CLIENT_TYPE[data_str]
+            session["state"] = "cleaning:cleaning_type"
+            _tg_answer_callback(cq_id, "")
+            _tg_send(chat_id, "Какой вид уборки нужен?", reply_markup=_bot_kb(BOT_CLEANING_TYPES))
+            return True
+
+        if state == "cleaning:cleaning_type" and data_str.startswith("clean:") and data_str in BOT_CLEANING_TYPES:
+            _tg_answer_callback(cq_id, "")
+            if data_str == "clean:other":
+                session["state"] = "cleaning:cleaning_type_custom"
+                _tg_send(chat_id, "Опишите, какой вид уборки вам нужен:")
+                return True
+            session["data"]["cleaning_type"] = BOT_CLEANING_TYPES[data_str]
+            session["state"] = "cleaning:area"
+            _tg_send(chat_id, "Какая площадь помещения?", reply_markup=_bot_kb(BOT_AREAS))
+            return True
+
+        if state == "cleaning:area" and data_str.startswith("area:") and data_str in BOT_AREAS:
+            session["data"]["area"] = BOT_AREAS[data_str]
+            session["state"] = "cleaning:when"
+            _tg_answer_callback(cq_id, "")
+            _tg_send(chat_id, "Когда нужна уборка?", reply_markup=_bot_kb(BOT_WHEN_OPTIONS))
+            return True
+
+        if state == "cleaning:when" and data_str.startswith("when:") and data_str in BOT_WHEN_OPTIONS:
+            session["data"]["when"] = BOT_WHEN_OPTIONS[data_str]
+            session["state"] = "cleaning:address"
+            _tg_answer_callback(cq_id, "")
+            _tg_send(chat_id, "Введите адрес или район:")
+            return True
+
+        return False
+
+    return False
 
 # ─────────── TELEGRAM WEBHOOK ───────────
 
@@ -1976,6 +2362,10 @@ async def telegram_webhook(request: Request, db: Session = Depends(get_db)):
     try:
         update = await request.json()
     except Exception:
+        return {"ok": True}
+
+    handled = await _handle_client_bot_update(update, db)
+    if handled:
         return {"ok": True}
 
     msg = update.get("message")

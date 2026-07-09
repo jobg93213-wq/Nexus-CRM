@@ -2136,7 +2136,7 @@ async function submitMailing(){
   const r = await api('POST','/mailings', payload);
   btn.disabled = false; btn.textContent = 'Отправить рассылку';
   if(r?.error){ toast(r.error,'error'); return; }
-  toast(r.message || `Рассылка поставлена в очередь: ${r.queued}`);
+  toast(r.message || `Отправлено: ${r.sent}, ошибок: ${r.failed}`);
   closeModal('newMailing');
   loadMailings();
 }

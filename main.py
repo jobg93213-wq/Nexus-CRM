@@ -1217,34 +1217,35 @@ def _send_smtp_mail(account: "EmailAccountDB", to_email: str, subject: str, body
             s.login(account.email, account.password)
             s.sendmail(account.email, [to_email], msg.as_string())
 
-def _send_campaign_now(campaign_id: str):
-    """Отправляет все письма конкретной рассылки сразу, одним проходом, в своём
-    потоке — без общего фонового опроса очереди. Запускается сразу при создании
-    рассылки (см. POST /mailings), поэтому письма не могут «зависнуть», ожидая,
-    пока их подхватит какой-то отдельный воркер."""
-    try:
-        with SessionLocal() as db:
-            items = (db.query(MailQueueDB)
-                       .filter(MailQueueDB.campaign_id == campaign_id, MailQueueDB.status == "pending")
-                       .order_by(MailQueueDB.id.asc())
-                       .all())
-            for item in items:
-                account = db.query(EmailAccountDB).filter(EmailAccountDB.id == item.email_account_id).first()
-                item.attempts = (item.attempts or 0) + 1
-                try:
-                    if not account:
-                        raise RuntimeError("Почтовый ящик отправителя удалён")
-                    _send_smtp_mail(account, item.to_email, item.subject, item.body)
-                    item.status = "sent"
-                    item.sent_at = datetime.utcnow()
-                    item.error = None
-                except Exception as e:
-                    item.status = "failed"
-                    item.error = str(e)
-                db.commit()
-                time.sleep(MAIL_SEND_INTERVAL)   # троттлинг, чтобы не словить блокировку от провайдера
-    except Exception as e:
-        print(f"[mail-sender] ошибка отправки кампании {campaign_id}: {e}")
+def _send_campaign_sync(db: Session, campaign_id: str) -> dict:
+    """Отправляет все письма рассылки прямо здесь и сейчас, синхронно, одно за
+    другим, через SMTP — без очереди, без фонового потока. Вызывается прямо
+    из обработчика POST /mailings, поэтому HTTP-ответ приходит только когда
+    все письма уже реально отправлены (или провалены)."""
+    items = (db.query(MailQueueDB)
+               .filter(MailQueueDB.campaign_id == campaign_id, MailQueueDB.status == "pending")
+               .order_by(MailQueueDB.id.asc())
+               .all())
+    sent, failed = 0, 0
+    for idx, item in enumerate(items):
+        account = db.query(EmailAccountDB).filter(EmailAccountDB.id == item.email_account_id).first()
+        item.attempts = 1
+        try:
+            if not account:
+                raise RuntimeError("Почтовый ящик отправителя удалён")
+            _send_smtp_mail(account, item.to_email, item.subject, item.body)
+            item.status = "sent"
+            item.sent_at = datetime.utcnow()
+            item.error = None
+            sent += 1
+        except Exception as e:
+            item.status = "failed"
+            item.error = str(e)
+            failed += 1
+        db.commit()
+        if idx < len(items) - 1:
+            time.sleep(MAIL_SEND_INTERVAL)   # троттлинг, чтобы не словить блокировку от провайдера
+    return {"sent": sent, "failed": failed}
 
 def _lead_to_dict(lead: LeadDB, db: Session):
     tags = db.query(TagDB).join(LeadTagDB, LeadTagDB.tag_id == TagDB.tag_id).filter(LeadTagDB.lead_id == lead.id).all()
@@ -2190,10 +2191,14 @@ def create_mailing(payload: MailingCreate, db: Session = Depends(get_db)):
         ))
         queued += 1
     db.commit()
-    # запускаем отправку сразу же, в отдельном потоке — не дожидаясь никакого
-    # общего фонового воркера, чтобы письма не «зависали» в очереди
-    threading.Thread(target=_send_campaign_now, args=(campaign_id,), daemon=True, name=f"mail-{campaign_id}").start()
-    return {"message": f"Рассылка запущена: {queued} писем отправляется", "campaign_id": campaign_id, "queued": queued}
+    # отправляем прямо сейчас, синхронно, в этом же запросе — никакой очереди
+    # и никакого фонового воркера, письма уходят через SMTP немедленно
+    result = _send_campaign_sync(db, campaign_id)
+    return {
+        "message": f"Рассылка завершена: отправлено {result['sent']}, ошибок {result['failed']}",
+        "campaign_id": campaign_id, "queued": queued,
+        "sent": result["sent"], "failed": result["failed"],
+    }
 
 @app.get("/mailings")
 def list_mailings(db: Session = Depends(get_db)):

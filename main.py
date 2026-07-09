@@ -536,12 +536,6 @@ def _start_email_poll_thread():
         print(f"[email-idle] ошибка при старте: {e}")
     print("[email-idle] IMAP IDLE запущен (push-режим)")
 
-@app.on_event("startup")
-def _start_mail_sender_thread():
-    t = threading.Thread(target=_mail_sender_worker, daemon=True, name="mail-sender")
-    t.start()
-    print("[mail-sender] воркер отправки рассылки запущен")
-
 # ─────────── SCHEMAS ───────────
 
 class Lead(BaseModel):
@@ -1198,7 +1192,6 @@ def _email_account_to_dict(a: "EmailAccountDB"):
 # ─────────── ВНУТРЕННЯЯ РАССЫЛКА (SMTP) ───────────
 
 MAIL_SEND_INTERVAL = float(os.getenv("MAIL_SEND_INTERVAL_SECONDS", "2"))   # пауза между письмами, антиспам-троттлинг
-MAIL_MAX_ATTEMPTS   = int(os.getenv("MAIL_MAX_ATTEMPTS", "3"))
 
 def _render_template(text: str, name: str) -> str:
     return (text or "").replace("{{name}}", name or "").replace("{{имя}}", name or "")
@@ -1224,37 +1217,34 @@ def _send_smtp_mail(account: "EmailAccountDB", to_email: str, subject: str, body
             s.login(account.email, account.password)
             s.sendmail(account.email, [to_email], msg.as_string())
 
-def _mail_sender_worker():
-    """Фоновый воркер: раз в MAIL_SEND_INTERVAL секунд забирает одно письмо
-    со статусом pending из очереди и отправляет его. Троттлинг — по одному
-    письму за тик, чтобы не словить блокировку от почтового провайдера."""
-    while True:
-        try:
-            with SessionLocal() as db:
-                item = (db.query(MailQueueDB)
-                          .filter(MailQueueDB.status == "pending")
-                          .order_by(MailQueueDB.id.asc())
-                          .first())
-                if item:
-                    account = db.query(EmailAccountDB).filter(EmailAccountDB.id == item.email_account_id).first()
-                    item.attempts = (item.attempts or 0) + 1
-                    try:
-                        if not account:
-                            raise RuntimeError("Почтовый ящик отправителя удалён")
-                        _send_smtp_mail(account, item.to_email, item.subject, item.body)
-                        item.status = "sent"
-                        item.sent_at = datetime.utcnow()
-                        item.error = None
-                    except Exception as e:
-                        item.error = str(e)
-                        if item.attempts >= MAIL_MAX_ATTEMPTS:
-                            item.status = "failed"
-                        else:
-                            item.status = "pending"   # попробуем ещё раз на следующем тике
-                    db.commit()
-        except Exception as e:
-            print(f"[mail-sender] ошибка воркера: {e}")
-        time.sleep(MAIL_SEND_INTERVAL)
+def _send_campaign_now(campaign_id: str):
+    """Отправляет все письма конкретной рассылки сразу, одним проходом, в своём
+    потоке — без общего фонового опроса очереди. Запускается сразу при создании
+    рассылки (см. POST /mailings), поэтому письма не могут «зависнуть», ожидая,
+    пока их подхватит какой-то отдельный воркер."""
+    try:
+        with SessionLocal() as db:
+            items = (db.query(MailQueueDB)
+                       .filter(MailQueueDB.campaign_id == campaign_id, MailQueueDB.status == "pending")
+                       .order_by(MailQueueDB.id.asc())
+                       .all())
+            for item in items:
+                account = db.query(EmailAccountDB).filter(EmailAccountDB.id == item.email_account_id).first()
+                item.attempts = (item.attempts or 0) + 1
+                try:
+                    if not account:
+                        raise RuntimeError("Почтовый ящик отправителя удалён")
+                    _send_smtp_mail(account, item.to_email, item.subject, item.body)
+                    item.status = "sent"
+                    item.sent_at = datetime.utcnow()
+                    item.error = None
+                except Exception as e:
+                    item.status = "failed"
+                    item.error = str(e)
+                db.commit()
+                time.sleep(MAIL_SEND_INTERVAL)   # троттлинг, чтобы не словить блокировку от провайдера
+    except Exception as e:
+        print(f"[mail-sender] ошибка отправки кампании {campaign_id}: {e}")
 
 def _lead_to_dict(lead: LeadDB, db: Session):
     tags = db.query(TagDB).join(LeadTagDB, LeadTagDB.tag_id == TagDB.tag_id).filter(LeadTagDB.lead_id == lead.id).all()
@@ -2200,7 +2190,10 @@ def create_mailing(payload: MailingCreate, db: Session = Depends(get_db)):
         ))
         queued += 1
     db.commit()
-    return {"message": f"Рассылка поставлена в очередь: {queued} писем", "campaign_id": campaign_id, "queued": queued}
+    # запускаем отправку сразу же, в отдельном потоке — не дожидаясь никакого
+    # общего фонового воркера, чтобы письма не «зависали» в очереди
+    threading.Thread(target=_send_campaign_now, args=(campaign_id,), daemon=True, name=f"mail-{campaign_id}").start()
+    return {"message": f"Рассылка запущена: {queued} писем отправляется", "campaign_id": campaign_id, "queued": queued}
 
 @app.get("/mailings")
 def list_mailings(db: Session = Depends(get_db)):

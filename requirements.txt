@@ -4,3 +4,4 @@ sqlalchemy==2.0.36
 pydantic==2.9.2
 httpx
 python-multipart
+openpyxl==3.1.5

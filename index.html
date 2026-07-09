@@ -247,23 +247,9 @@
     .empty-state svg { width:36px; height:36px; color:var(--border); margin:0 auto 10px; display:block; }
 
     /* INTEGRATIONS */
-    .integ-grid { display:grid; grid-template-columns:repeat(auto-fill, minmax(320px,1fr)); gap:16px; margin-bottom:24px; }
-    .integ-card { background:var(--surface); border:1px solid var(--border); border-radius:12px; padding:18px; }
-    .integ-card-head { display:flex; align-items:center; gap:12px; margin-bottom:12px; }
-    .integ-icon { width:38px; height:38px; border-radius:10px; display:flex; align-items:center; justify-content:center; flex-shrink:0; }
-    .integ-icon svg { width:18px; height:18px; }
-    .integ-name { font-size:14px; font-weight:600; }
-    .integ-desc { font-size:12px; color:var(--gray); margin-top:2px; }
     .token-box { background:var(--surface2); border:1px solid var(--border); border-radius:8px; padding:10px 60px 10px 14px; font-family:'Courier New',monospace; font-size:12px; color:var(--purple-bright); word-break:break-all; margin:8px 0; position:relative; }
     .token-copy { position:absolute; top:8px; right:8px; background:var(--purple-deep); border:1px solid rgba(109,40,217,.3); border-radius:6px; cursor:pointer; padding:4px 8px; font-size:11px; color:var(--purple-bright); font-family:inherit; }
     .token-copy:hover { background:var(--purple); color:#fff; }
-    .integ-steps { padding-left:18px; margin-top:10px; }
-    .integ-steps li { font-size:12px; color:var(--gray-light); margin-bottom:6px; line-height:1.5; }
-    .integ-steps code { background:var(--surface2); padding:1px 5px; border-radius:4px; font-size:11px; color:var(--purple-bright); }
-    .snippet-box { background:#0d0d1a; border:1px solid var(--border); border-radius:8px; padding:12px 14px; margin-top:10px; position:relative; overflow:auto; }
-    .snippet-box pre { font-size:11px; color:#a8b4d8; white-space:pre-wrap; word-break:break-all; }
-    .snippet-copy { position:absolute; top:8px; right:8px; background:var(--surface); border:1px solid var(--border); border-radius:6px; cursor:pointer; padding:4px 8px; font-size:11px; color:var(--gray-light); font-family:inherit; }
-    .snippet-copy:hover { color:var(--white); border-color:var(--purple); }
     .status-dot { width:8px; height:8px; border-radius:50%; display:inline-block; margin-right:6px; }
     .status-dot.active { background:var(--success); box-shadow:0 0 6px rgba(16,185,129,.5); }
 
@@ -315,7 +301,6 @@
       .stats-grid { grid-template-columns:repeat(2,1fr); }
       .content { padding:14px; }
       .topbar { padding:0 14px; }
-      .integ-grid { grid-template-columns:1fr; }
     }
     @media (max-width: 500px) {
       .stats-grid { grid-template-columns:1fr 1fr; gap:10px; }
@@ -460,6 +445,10 @@
       <svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>Лента событий
     </div>
     <div class="nav-section manager-only">Настройки</div>
+    <div class="nav-item manager-only" data-view-link="mailings" onclick="switchView('mailings',this);closeSidebar()">
+      <svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z"/></svg>
+      Рассылки
+    </div>
     <div class="nav-item manager-only" data-view-link="integrations" onclick="switchView('integrations',this);closeSidebar()">
       <svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" d="M10 20l4-16m4 4l4 4-4 4M6 16l-4-4 4-4"/></svg>Интеграции
     </div>
@@ -514,6 +503,7 @@
         <select class="form-select" id="filterTag" onchange="applyFilters()"><option value="">Все теги</option></select>
         <button class="btn btn-ghost btn-sm" onclick="resetFilters()">Сбросить</button>
         <div style="margin-left:auto;display:flex;gap:8px;">
+          <button class="btn btn-ghost btn-sm" onclick="openImportLeads()">⬆ Импорт из Excel</button>
           <button class="btn btn-ghost btn-sm" onclick="exportCsv()">⬇ Экспорт CSV</button>
           <button class="btn btn-primary" onclick="openModal('addLead')">+ Лид</button>
         </div>
@@ -539,6 +529,7 @@
       <div style="margin-bottom:14px;display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:10px;">
         <p style="font-size:13px;color:var(--gray);">Перетаскивайте карточки между этапами или меняйте статус кнопкой</p>
         <div style="display:flex;gap:8px;">
+          <button class="btn btn-ghost btn-sm" onclick="openImportLeads()">⬆ Импорт из Excel</button>
           <button class="btn btn-ghost btn-sm" onclick="exportCsv()">⬇ Экспорт CSV</button>
           <button class="btn btn-primary btn-sm" onclick="openModal('addLead')">+ Новый лид</button>
         </div>
@@ -636,6 +627,21 @@
       </div>
     </div>
 
+    <!-- MAILINGS -->
+    <div data-view="mailings">
+      <div style="margin-bottom:14px;display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:10px;">
+        <p style="font-size:13px;color:var(--gray);">Внутренняя рассылка по email — контакты берутся из карточек клиентов (поле Email)</p>
+        <button class="btn btn-primary btn-sm" onclick="openNewMailing()">+ Новая рассылка</button>
+      </div>
+
+      <div class="card">
+        <div class="card-header"><div class="card-title">История рассылок</div></div>
+        <div class="card-body">
+          <div id="mailingsList"><div class="empty-state">Загрузка…</div></div>
+        </div>
+      </div>
+    </div>
+
     <!-- INTEGRATIONS -->
     <div data-view="integrations">
       <p style="font-size:13px;color:var(--gray);margin-bottom:20px;">Подключите внешние сервисы и встройте форму заявок на сайт</p>
@@ -691,112 +697,6 @@
         </div>
       </div>
 
-      <div class="integ-grid">
-        <div class="integ-card">
-          <div class="integ-card-head">
-            <div class="integ-icon" style="background:rgba(99,102,241,.15);">
-              <svg fill="none" stroke="#818CF8" viewBox="0 0 24 24"><path stroke-width="1.8" stroke-linecap="round" d="M3 12l2-2m0 0l7-7 7 7M5 10v10a1 1 0 001 1h3m10-11l2 2m-2-2v10a1 1 0 01-1 1h-3m-6 0a1 1 0 001-1v-4a1 1 0 011-1h2a1 1 0 011 1v4a1 1 0 001 1m-6 0h6"/></svg>
-            </div>
-            <div><div class="integ-name">Виджет на сайт</div><div class="integ-desc">Кнопка и форма заявки</div></div>
-          </div>
-          <p style="font-size:12px;color:var(--gray-light);line-height:1.6;">Добавьте одну строку на сайт — и кнопка заявки автоматически создаёт лиды в CRM.</p>
-          <div style="margin-top:12px;">
-            <div style="font-size:11px;color:var(--gray);margin-bottom:4px;">Вставьте перед <code style="background:var(--surface2);padding:1px 5px;border-radius:4px;color:var(--purple-bright);">&lt;/body&gt;</code>:</div>
-            <div class="snippet-box">
-              <button class="snippet-copy" onclick="copySnippet('widgetSnippet')">Копировать</button>
-              <pre id="widgetSnippet">&lt;script src="/widget.js" data-token="__TOKEN__" data-pipeline="1" data-source="Заказать звонок" data-label="Заказать звонок"&gt;&lt;/script&gt;</pre>
-            </div>
-          </div>
-        </div>
-
-        <div class="integ-card">
-          <div class="integ-card-head">
-            <div class="integ-icon" style="background:rgba(16,185,129,.15);">
-              <svg fill="none" stroke="#10B981" viewBox="0 0 24 24"><path stroke-width="1.8" stroke-linecap="round" d="M8 9l3 3-3 3m5 0h3M5 20h14a2 2 0 002-2V6a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"/></svg>
-            </div>
-            <div><div class="integ-name">REST API</div><div class="integ-desc">POST /leads — прямые запросы</div></div>
-          </div>
-          <p style="font-size:12px;color:var(--gray-light);line-height:1.6;">Отправляйте лидов из любого сервиса через HTTP POST.</p>
-          <div class="snippet-box" style="margin-top:12px;">
-            <button class="snippet-copy" onclick="copySnippet('curlSnippet')">Копировать</button>
-            <pre id="curlSnippet">curl -X POST __BASE__/leads \
-  -H "Content-Type: application/json" \
-  -d '{
-    "name":"Иван",
-    "phone":"+79991234567",
-    "pipeline_id":1,
-    "client_type":"физ",
-    "source":"Сайт — Заказать звонок",
-    "telegram":"@ivan",
-    "whatsapp":"+79991234567"
-  }'</pre>
-          </div>
-          <p style="font-size:11px;color:var(--gray);margin-top:8px;">Swagger: <code>/docs</code></p>
-        </div>
-
-        <div class="integ-card">
-          <div class="integ-card-head">
-            <div class="integ-icon" style="background:rgba(34,158,217,.15);">
-              <svg fill="none" stroke="#229ED9" viewBox="0 0 24 24"><path stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" d="M12 20l9-5-9-5-9 5 9 5zM12 4l9 5-9 5-9-5 9-5z"/></svg>
-            </div>
-            <div><div class="integ-name">Telegram-уведомления клинерам</div><div class="integ-desc">Заявка «Выезд на объект» → уведомление</div></div>
-          </div>
-          <p style="font-size:12px;color:var(--gray-light);line-height:1.6;">Когда у лида появляется статус «Выезд на объект», все подключённые клинеры получают сообщение в Telegram с кнопкой «✅ Взять в работу» — заявку можно забрать прямо из чата.</p>
-          <ol class="integ-steps">
-            <li>Создайте бота в <code>@BotFather</code>, получите токен</li>
-            <li>Укажите токен в карточке «Telegram-бот» выше (или переменной окружения <code>TELEGRAM_BOT_TOKEN</code>)</li>
-            <li>Настройте вебхук на адрес <code id="tgWebhookUrl">__BASE__/telegram/webhook</code> (автоматически, если задать <code>PUBLIC_URL</code>, либо вручную: <code>POST /telegram/setup-webhook?base_url=...</code>)</li>
-            <li>Каждый клинер/менеджер жмёт «Подключить» в разделе «Менеджеры» напротив своего имени и переходит по ссылке в Telegram</li>
-          </ol>
-        </div>
-
-        <div class="integ-card">
-          <div class="integ-card-head">
-            <div class="integ-icon" style="background:rgba(34,158,217,.10);">
-              <svg fill="none" stroke="#229ED9" viewBox="0 0 24 24"><path stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2"/></svg>
-            </div>
-            <div><div class="integ-name">Telegram-бот для клиентов</div><div class="integ-desc">/start → полная воронка заявок</div></div>
-          </div>
-          <p style="font-size:12px;color:var(--gray-light);line-height:1.6;">Тот же бот (токен указан выше) полностью ведёт диалог с клиентом:</p>
-          <ol class="integ-steps">
-            <li>🧹 «Заказать уборку» — подробная анкета (объект, вид уборки, площадь, срок, адрес, телефон, имя) → лид падает в нужную воронку (физ/юр — по типу объекта)</li>
-            <li>📞 «Заказать звонок» — быстрая заявка: имя, фамилия, телефон → лид в CRM</li>
-            <li>💬 «Связаться с менеджером» — свободный вопрос уходит в чат уведомлений (см. выше); ответ менеджера (Reply на сообщение) автоматически возвращается клиенту</li>
-          </ol>
-          <p style="font-size:11px;color:var(--gray);margin-top:8px;">Работает сразу после того, как выше сохранён токен и настроен вебхук — ничего дополнительно устанавливать не нужно.</p>
-        </div>
-
-        <div class="integ-card">
-          <div class="integ-card-head">
-            <div class="integ-icon" style="background:rgba(37,211,102,.15);">
-              <svg fill="none" stroke="#25D366" viewBox="0 0 24 24"><path stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" d="M21 11.5a8.38 8.38 0 01-.9 3.8 8.5 8.5 0 01-7.6 4.7 8.38 8.38 0 01-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 01-.9-3.8 8.5 8.5 0 014.7-7.6 8.38 8.38 0 013.8-.9h.5a8.48 8.48 0 018 8v.5z"/></svg>
-            </div>
-            <div><div class="integ-name">WhatsApp поле</div><div class="integ-desc">Своя интеграция через API</div></div>
-          </div>
-          <p style="font-size:12px;color:var(--gray-light);line-height:1.6;">В карточке лида теперь есть отдельное поле WhatsApp. Настройте свою интеграцию через n8n/Make — лиды будут содержать номер WhatsApp клиента.</p>
-        </div>
-
-        <div class="integ-card">
-          <div class="integ-card-head">
-            <div class="integ-icon" style="background:rgba(168,85,247,.15);">
-              <svg fill="none" stroke="#C084FC" viewBox="0 0 24 24"><path stroke-width="1.8" stroke-linecap="round" d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1"/></svg>
-            </div>
-            <div><div class="integ-name">Webhook / n8n / Zapier</div><div class="integ-desc">Без кода</div></div>
-          </div>
-          <p style="font-size:12px;color:var(--gray-light);line-height:1.6;">Свяжите CRM с любой формой или сервисом — через <code>POST /leads</code> и <code>POST /notes</code> для заметок из чатов.</p>
-        </div>
-
-        <div class="integ-card">
-          <div class="integ-card-head">
-            <div class="integ-icon" style="background:rgba(168,85,247,.12);">
-              <svg fill="none" stroke="#A78BFA" viewBox="0 0 24 24"><path stroke-width="1.8" stroke-linecap="round" d="M12 18h.01M8 21h8a2 2 0 002-2V5a2 2 0 00-2-2H8a2 2 0 00-2 2v14a2 2 0 002 2z"/></svg>
-            </div>
-            <div><div class="integ-name">Android APK</div><div class="integ-desc">Собрать за 5 минут</div></div>
-          </div>
-          <p style="font-size:12px;color:var(--gray-light);line-height:1.6;">Через <strong style="color:var(--white);">WebIntoApp.com</strong> соберите APK прямо из админки. Название «cleanfloorCRM», цвет #6D28D9.</p>
-          <div style="margin-top:10px;padding:10px 12px;background:rgba(16,185,129,.08);border:1px solid rgba(16,185,129,.2);border-radius:8px;font-size:11px;color:#6ee7b7;">💡 Для iOS используйте PWA: в Safari «Добавить на экран»</div>
-        </div>
-      </div>
     </div>
 
   </div><!-- /content -->
@@ -1029,6 +929,13 @@
         <div><label class="form-label">IMAP-порт</label><input type="number" class="form-input" id="eaImapPort" value="993" /></div>
       </div>
       <div class="form-row"><label class="form-label" style="display:flex;align-items:center;gap:8px;"><input type="checkbox" id="eaImapSsl" checked /> IMAP по SSL</label></div>
+      <div class="form-section-title" style="margin-top:6px;">SMTP (для отправки рассылок из этого ящика)</div>
+      <div class="form-row col-2">
+        <div><label class="form-label">SMTP-хост</label><input type="text" class="form-input" id="eaSmtpHost" placeholder="smtp.hoster.by" /></div>
+        <div><label class="form-label">SMTP-порт</label><input type="number" class="form-input" id="eaSmtpPort" value="465" /></div>
+      </div>
+      <div class="form-row"><label class="form-label" style="display:flex;align-items:center;gap:8px;"><input type="checkbox" id="eaSmtpSsl" checked /> SMTP по SSL (иначе STARTTLS)</label></div>
+      <p style="font-size:11px;color:var(--gray);line-height:1.6;margin-top:-6px;">Обычно логин/пароль для SMTP совпадают с указанными выше для IMAP.</p>
       <div class="form-row col-2">
         <div><label class="form-label">Воронка для новых лидов</label><select class="form-select" id="eaPipeline"></select></div>
         <div><label class="form-label">Тип клиента</label><select class="form-select" id="eaClientType"><option value="юр">Юр. лицо</option><option value="физ">Физ. лицо</option></select></div>
@@ -1045,6 +952,74 @@
 </div>
 
 <div class="toast-wrap" id="toastWrap"></div>
+
+<!-- New Mailing -->
+<div class="modal-overlay" id="modal-newMailing">
+  <div class="modal modal-lg">
+    <div class="modal-head"><div class="modal-title">Новая рассылка</div><button class="modal-close" onclick="closeModal('newMailing')">✕</button></div>
+    <div class="modal-body">
+      <div id="mailingNoAccountsHint" style="display:none;margin-bottom:12px;padding:10px 12px;background:rgba(245,158,11,.1);border:1px solid rgba(245,158,11,.3);border-radius:8px;font-size:12px;color:#F59E0B;">
+        Нет ни одного ящика с настроенным SMTP. Откройте «Интеграции» → «Почта (IMAP)» → отредактируйте ящик и заполните блок SMTP + пароль.
+      </div>
+      <div class="form-row"><label class="form-label">Отправитель *</label><select class="form-select" id="mailAccountSelect"></select></div>
+      <div class="form-row"><label class="form-label">Название рассылки (для истории)</label><input type="text" class="form-input" id="mailCampaignName" placeholder="Например: Акция на майские" /></div>
+      <div class="form-row"><label class="form-label">Получатели *</label>
+        <select class="form-select" id="mailRecipientMode" onchange="onMailRecipientModeChange()">
+          <option value="all">Все клиенты с email</option>
+          <option value="pipeline">Клиенты из воронки</option>
+          <option value="tag">Клиенты с тегом</option>
+        </select>
+      </div>
+      <div class="form-row" id="mailPipelineRow" style="display:none;"><label class="form-label">Воронка</label><select class="form-select" id="mailPipelineSelect"></select></div>
+      <div class="form-row" id="mailTagRow" style="display:none;"><label class="form-label">Тег</label><select class="form-select" id="mailTagSelect"></select></div>
+      <div class="form-row"><label class="form-label">Тема письма *</label><input type="text" class="form-input" id="mailSubject" placeholder="Специальное предложение для вас" /></div>
+      <div class="form-row"><label class="form-label">Текст письма *</label><textarea class="form-input" id="mailBody" rows="8" placeholder="Здравствуйте, {{name}}!&#10;&#10;..."></textarea></div>
+      <p style="font-size:11px;color:var(--gray);line-height:1.6;">Подстановка <code style="background:var(--surface2);padding:1px 5px;border-radius:4px;color:var(--purple-bright);">{{name}}</code> в теме или тексте автоматически заменится на имя клиента из карточки. Письма отправляются постепенно в фоне (антиспам-троттлинг), прогресс смотрите в истории ниже.</p>
+    </div>
+    <div class="modal-foot">
+      <button class="btn btn-ghost" onclick="closeModal('newMailing')">Отмена</button>
+      <button class="btn btn-primary" id="mailSubmitBtn" onclick="submitMailing()">Отправить рассылку</button>
+    </div>
+  </div>
+</div>
+
+<!-- Mailing Detail -->
+<div class="modal-overlay" id="modal-mailingDetail">
+  <div class="modal modal-lg">
+    <div class="modal-head"><div class="modal-title" id="mailingDetailTitle">Рассылка</div><button class="modal-close" onclick="closeModal('mailingDetail')">✕</button></div>
+    <div class="modal-body">
+      <div id="mailingDetailBody"><div class="empty-state">Загрузка…</div></div>
+    </div>
+  </div>
+</div>
+
+<!-- Import Leads -->
+<div class="modal-overlay" id="modal-importLeads">
+  <div class="modal">
+    <div class="modal-head"><div class="modal-title">Импорт лидов из Excel</div><button class="modal-close" onclick="closeModal('importLeads')">✕</button></div>
+    <div class="modal-body">
+      <p style="font-size:12px;color:var(--gray-light);line-height:1.6;margin-bottom:10px;">
+        Загрузите .xlsx-файл со столбцами <strong style="color:var(--white);">Имя, Телефон, Email</strong>
+        (также распознаются «Компания», «Источник», «Комментарий»). Порядок столбцов не важен, важны заголовки в первой строке.
+      </p>
+      <button class="btn btn-ghost btn-sm" onclick="downloadImportTemplate()" style="margin-bottom:14px;">⬇ Скачать шаблон .xlsx</button>
+      <div class="form-row"><label class="form-label">Файл .xlsx *</label><input type="file" class="form-input" id="importFile" accept=".xlsx,.xlsm" /></div>
+      <div class="form-row col-2">
+        <div><label class="form-label">Воронка</label><select class="form-select" id="importPipeline"></select></div>
+        <div><label class="form-label">Тип клиента</label><select class="form-select" id="importClientType"><option value="физ">Физ. лицо</option><option value="юр">Юр. лицо</option></select></div>
+      </div>
+      <div class="form-row col-2">
+        <div><label class="form-label">Менеджер (необязательно)</label><select class="form-select" id="importManager"><option value="">Не назначать</option></select></div>
+        <div><label class="form-label">Источник</label><input type="text" class="form-input" id="importSource" value="Импорт из Excel" /></div>
+      </div>
+      <div id="importResult" style="display:none;margin-top:12px;padding:12px;background:var(--surface2);border-radius:8px;font-size:12px;line-height:1.7;"></div>
+    </div>
+    <div class="modal-foot">
+      <button class="btn btn-ghost" onclick="closeModal('importLeads')">Закрыть</button>
+      <button class="btn btn-primary" id="importSubmitBtn" onclick="submitImportLeads()">Импортировать</button>
+    </div>
+  </div>
+</div>
 
 
 <script>
@@ -1092,7 +1067,7 @@ function switchView(name, el){
   document.querySelectorAll('.nav-item').forEach(n=>n.classList.remove('active'));
   document.querySelector('[data-view="'+name+'"]').classList.add('active');
   if(el) el.classList.add('active');
-  const titles = { dashboard:'Обзор', leads:'Лиды', kanban:'Воронки', analytics:'Аналитика', managers:'Менеджеры', tasks:'Задачи', tags:'Теги', customfields:'Кастомные поля', lossreasons:'Причины отказа', history:'Лента событий', integrations:'Интеграции' };
+  const titles = { dashboard:'Обзор', leads:'Лиды', kanban:'Воронки', analytics:'Аналитика', managers:'Менеджеры', tasks:'Задачи', tags:'Теги', customfields:'Кастомные поля', lossreasons:'Причины отказа', history:'Лента событий', mailings:'Рассылки', integrations:'Интеграции' };
   $('topbarTitle').textContent = titles[name] || name;
   currentView = name;
   if(name==='dashboard') loadDashboard();
@@ -1105,6 +1080,7 @@ function switchView(name, el){
   else if(name==='customfields') loadCustomFields();
   else if(name==='lossreasons') loadReasons();
   else if(name==='history') loadHistory();
+  else if(name==='mailings') loadMailings();
   else if(name==='integrations') loadIntegrations();
 }
 
@@ -1339,6 +1315,52 @@ async function bulkDelete(){
 }
 
 function exportCsv(){ window.open(API + '/export/leads.csv', '_blank'); }
+
+// ── IMPORT LEADS (Excel) ──
+function downloadImportTemplate(){ window.open(API + '/leads/import/template', '_blank'); }
+async function openImportLeads(){
+  const pipelines = await ensurePipelines();
+  $('importPipeline').innerHTML = pipelines.map(p => `<option value="${p.pipeline_id}">${escapeHtml(p.name)}</option>`).join('');
+  const managers = await api('GET','/managers');
+  $('importManager').innerHTML = '<option value="">Не назначать</option>' +
+    (managers || []).map(m => `<option value="${m.manager_id}">${escapeHtml(m.name)}</option>`).join('');
+  $('importFile').value = '';
+  $('importSource').value = 'Импорт из Excel';
+  $('importResult').style.display = 'none';
+  $('importResult').innerHTML = '';
+  openModal('importLeads');
+}
+async function submitImportLeads(){
+  const fileInput = $('importFile');
+  if(!fileInput.files || !fileInput.files[0]){ toast('Выберите файл .xlsx','error'); return; }
+  const btn = $('importSubmitBtn');
+  btn.disabled = true; btn.textContent = 'Импортируем…';
+  const fd = new FormData();
+  fd.append('file', fileInput.files[0]);
+  fd.append('pipeline_id', $('importPipeline').value);
+  fd.append('client_type', $('importClientType').value);
+  if($('importManager').value) fd.append('manager_id', $('importManager').value);
+  fd.append('source', $('importSource').value.trim() || 'Импорт из Excel');
+  let r;
+  try {
+    const resp = await fetch(API + '/leads/import', { method:'POST', body: fd });
+    r = await resp.json();
+  } catch(e) { toast('Сервер недоступен','error'); btn.disabled=false; btn.textContent='Импортировать'; return; }
+  btn.disabled = false; btn.textContent = 'Импортировать';
+  if(r?.error){ toast(r.error,'error'); return; }
+  const box = $('importResult');
+  box.style.display = 'block';
+  let html = `<div style="color:var(--success);font-weight:600;">Создано лидов: ${r.created}</div>`;
+  html += `<div style="color:var(--gray-light);">Пропущено: ${r.skipped}</div>`;
+  if(r.errors && r.errors.length){
+    html += `<div style="margin-top:8px;color:#F59E0B;">Подробности:</div><div style="max-height:140px;overflow:auto;margin-top:4px;">` +
+      r.errors.map(e => `<div>• ${escapeHtml(e)}</div>`).join('') + `</div>`;
+  }
+  box.innerHTML = html;
+  toast(`Импорт завершён: создано ${r.created}`);
+  if(currentView === 'leads') loadLeadsView();
+  if(currentView === 'kanban') loadKanban();
+}
 
 // ── LEAD DETAIL ──
 async function openLeadDetail(phone){
@@ -1982,9 +2004,6 @@ async function loadIntegrations(){
   const t = await api('GET','/settings/widget-token');
   const token = t?.token || '';
   $('apiTokenBox').firstChild.textContent = token;
-  $('widgetSnippet').textContent = `<script src="${API}/widget.js" data-token="${token}" data-pipeline="1" data-source="Заказать звонок" data-label="Заказать звонок"><\/script>\n<script src="${API}/widget.js" data-token="${token}" data-pipeline="1" data-source="Заказать просчет" data-label="Заказать просчет"><\/script>`;
-  $('curlSnippet').textContent = `curl -X POST ${API}/leads \\\n  -H "Content-Type: application/json" \\\n  -d '{\n    "name":"Иван",\n    "phone":"+79991234567",\n    "pipeline_id":1,\n    "client_type":"физ",\n    "source":"Сайт — кнопка «Заказать звонок»",\n    "telegram":"@ivan",\n    "whatsapp":"+79991234567"\n  }'`;
-  const tgUrl = $('tgWebhookUrl'); if (tgUrl) tgUrl.textContent = `${API}/telegram/webhook`;
   loadEmailAccounts();
   loadTgSettings();
 }
@@ -2019,7 +2038,108 @@ async function regenToken(){
   if(r?.token){ toast('Токен обновлён'); loadIntegrations(); }
 }
 function copyToken(){ navigator.clipboard.writeText($('apiTokenBox').firstChild.textContent.trim()).then(()=>toast('Токен скопирован')).catch(()=>toast('Ошибка','error')); }
-function copySnippet(id){ navigator.clipboard.writeText($(id).textContent).then(()=>toast('Скопировано')).catch(()=>toast('Ошибка','error')); }
+
+// ── MAILINGS (внутренняя SMTP-рассылка) ──
+async function loadMailings(){
+  const list = await api('GET','/mailings');
+  const box = $('mailingsList');
+  if(!list || !list.length){ box.innerHTML = '<div class="empty-state">Рассылок пока не было</div>'; return; }
+  box.innerHTML = list.map(m => {
+    const date = m.created_at ? new Date(m.created_at).toLocaleString('ru-RU') : '';
+    const progressPct = m.total ? Math.round(((m.sent + m.failed) / m.total) * 100) : 0;
+    return `<div class="mgr-row" style="align-items:flex-start;flex-wrap:wrap;gap:14px;cursor:pointer;" onclick="viewMailingDetail('${m.campaign_id}')">
+      <div style="flex:1;min-width:220px;">
+        <div style="color:var(--white);font-weight:600;">${escapeHtml(m.campaign_name || 'Без названия')}</div>
+        <div style="font-size:12px;color:var(--gray);">${date} · всего писем: ${m.total}</div>
+      </div>
+      <div style="font-size:12px;white-space:nowrap;">
+        <span style="color:var(--success);">✔ ${m.sent}</span>&nbsp;
+        <span style="color:#EF4444;">✖ ${m.failed}</span>&nbsp;
+        <span style="color:var(--gray-light);">⏳ ${m.pending}</span>
+        <span style="color:var(--gray);margin-left:8px;">(${progressPct}%)</span>
+      </div>
+    </div>`;
+  }).join('');
+}
+
+async function viewMailingDetail(campaignId){
+  openModal('mailingDetail');
+  $('mailingDetailTitle').textContent = 'Рассылка';
+  $('mailingDetailBody').innerHTML = '<div class="empty-state">Загрузка…</div>';
+  const items = await api('GET', `/mailings/${campaignId}`);
+  if(!items || items.error){ $('mailingDetailBody').innerHTML = '<div class="empty-state">Не удалось загрузить</div>'; return; }
+  const statusLabel = { sent:'<span style="color:var(--success);">отправлено</span>', failed:'<span style="color:#EF4444;">ошибка</span>', pending:'<span style="color:var(--gray-light);">в очереди</span>' };
+  let html = `<div style="display:flex;justify-content:flex-end;margin-bottom:10px;">
+      <button class="btn btn-ghost btn-sm" onclick="cancelMailingConfirm('${campaignId}')">Отменить неотправленные</button>
+    </div>
+    <div class="table-wrap"><table><thead><tr><th>Получатель</th><th>Статус</th><th>Попытки</th><th>Отправлено</th></tr></thead><tbody>`;
+  html += items.map(i => `<tr>
+      <td>${escapeHtml(i.to_name || '')}<br><span style="font-size:11px;color:var(--gray);">${escapeHtml(i.to_email)}</span></td>
+      <td>${statusLabel[i.status] || i.status}${i.error ? `<div style="font-size:11px;color:var(--gray);">${escapeHtml(i.error)}</div>` : ''}</td>
+      <td>${i.attempts}</td>
+      <td>${i.sent_at ? new Date(i.sent_at).toLocaleString('ru-RU') : '—'}</td>
+    </tr>`).join('');
+  html += `</tbody></table></div>`;
+  $('mailingDetailBody').innerHTML = html;
+}
+
+async function cancelMailingConfirm(campaignId){
+  if(!confirm('Отменить все ещё не отправленные письма этой рассылки?')) return;
+  const r = await api('DELETE', `/mailings/${campaignId}`);
+  toast(r?.message || 'Готово');
+  viewMailingDetail(campaignId);
+  loadMailings();
+}
+
+async function openNewMailing(){
+  const accounts = await api('GET','/mail-accounts');
+  const hint = $('mailingNoAccountsHint');
+  const sel = $('mailAccountSelect');
+  if(!accounts || !accounts.length){
+    hint.style.display = 'block';
+    sel.innerHTML = '<option value="">Нет доступных ящиков</option>';
+  } else {
+    hint.style.display = 'none';
+    sel.innerHTML = accounts.map(a => `<option value="${a.id}">${escapeHtml(a.name)} (${escapeHtml(a.email)})</option>`).join('');
+  }
+  const pipelines = await ensurePipelines();
+  $('mailPipelineSelect').innerHTML = pipelines.map(p => `<option value="${p.pipeline_id}">${escapeHtml(p.name)}</option>`).join('');
+  const tags = await api('GET','/tags');
+  $('mailTagSelect').innerHTML = (tags || []).map(t => `<option value="${t.tag_id}">${escapeHtml(t.name)}</option>`).join('');
+  $('mailCampaignName').value = ''; $('mailSubject').value = ''; $('mailBody').value = '';
+  $('mailRecipientMode').value = 'all';
+  onMailRecipientModeChange();
+  openModal('newMailing');
+}
+function onMailRecipientModeChange(){
+  const mode = $('mailRecipientMode').value;
+  $('mailPipelineRow').style.display = mode === 'pipeline' ? 'block' : 'none';
+  $('mailTagRow').style.display = mode === 'tag' ? 'block' : 'none';
+}
+async function submitMailing(){
+  const accountId = parseInt($('mailAccountSelect').value);
+  const subject = $('mailSubject').value.trim();
+  const body = $('mailBody').value.trim();
+  if(!accountId){ toast('Выберите ящик-отправитель (настройте SMTP в Интеграциях)','error'); return; }
+  if(!subject || !body){ toast('Заполните тему и текст письма','error'); return; }
+  const payload = {
+    email_account_id: accountId,
+    subject, body,
+    campaign_name: $('mailCampaignName').value.trim() || null,
+  };
+  const mode = $('mailRecipientMode').value;
+  if(mode === 'pipeline') payload.pipeline_id = parseInt($('mailPipelineSelect').value);
+  if(mode === 'tag') payload.tag_id = parseInt($('mailTagSelect').value);
+
+  const btn = $('mailSubmitBtn');
+  btn.disabled = true; btn.textContent = 'Отправляем…';
+  const r = await api('POST','/mailings', payload);
+  btn.disabled = false; btn.textContent = 'Отправить рассылку';
+  if(r?.error){ toast(r.error,'error'); return; }
+  toast(r.message || `Рассылка поставлена в очередь: ${r.queued}`);
+  closeModal('newMailing');
+  loadMailings();
+}
 
 // ── EMAIL ACCOUNTS (IMAP) ──
 let editingEmailAccountId = null;
@@ -2063,12 +2183,14 @@ async function openAddEmailAccount(id){
     $('eaName').value = a.name; $('eaEmail').value = a.email; $('eaPassword').value = '';
     $('eaPassHint').textContent = a.has_password ? '(оставьте пустым, чтобы не менять)' : '(пароль не задан)';
     $('eaImapHost').value = a.imap_host; $('eaImapPort').value = a.imap_port; $('eaImapSsl').checked = a.imap_ssl;
+    $('eaSmtpHost').value = a.smtp_host || ''; $('eaSmtpPort').value = a.smtp_port || 465; $('eaSmtpSsl').checked = a.smtp_ssl !== false;
     $('eaPipeline').value = a.pipeline_id; $('eaClientType').value = a.client_type;
     $('eaActive').checked = a.active;
   } else {
     $('emailAccountModalTitle').textContent = 'Новый почтовый ящик';
     $('eaName').value=''; $('eaEmail').value=''; $('eaPassword').value=''; $('eaPassHint').textContent='';
     $('eaImapHost').value='imap.hoster.by'; $('eaImapPort').value=993; $('eaImapSsl').checked=true;
+    $('eaSmtpHost').value='smtp.hoster.by'; $('eaSmtpPort').value=465; $('eaSmtpSsl').checked=true;
     $('eaClientType').value='юр'; $('eaActive').checked=true;
   }
   openModal('addEmailAccount');
@@ -2081,6 +2203,9 @@ function _emailAccountPayload(){
     imap_host: $('eaImapHost').value.trim(),
     imap_port: parseInt($('eaImapPort').value) || 993,
     imap_ssl: $('eaImapSsl').checked,
+    smtp_host: $('eaSmtpHost').value.trim() || null,
+    smtp_port: parseInt($('eaSmtpPort').value) || 465,
+    smtp_ssl: $('eaSmtpSsl').checked,
     pipeline_id: parseInt($('eaPipeline').value),
     client_type: $('eaClientType').value,
     active: $('eaActive').checked,

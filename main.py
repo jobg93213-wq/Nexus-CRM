@@ -8,9 +8,15 @@ import httpx
 import secrets
 import threading
 import imaplib
+import smtplib
+import uuid
 import email as email_lib
 from email.header import decode_header
 from email.utils import parseaddr
+from email.mime.text import MIMEText
+from email.mime.multipart import MIMEMultipart
+import openpyxl
+from fastapi import UploadFile, File, Form
 from datetime import datetime, timedelta
 from typing import Optional, List
 from fastapi import FastAPI, Depends, Request, Query, Response
@@ -20,7 +26,7 @@ from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from pydantic import BaseModel, Field
 from sqlalchemy import (
     create_engine, Column, Integer, String, Boolean, ForeignKey,
-    DateTime, Text, text, func, and_, or_
+    DateTime, Text, text, func, and_, or_, case
 )
 from sqlalchemy.orm import declarative_base, sessionmaker, Session
 
@@ -198,6 +204,25 @@ class EmailAccountDB(Base):
     last_error    = Column(Text, nullable=True)
     leads_created = Column(Integer, default=0)
     created_at    = Column(DateTime, default=datetime.utcnow)
+
+class MailQueueDB(Base):
+    """Очередь внутренней email-рассылки. Письма ставятся в очередь и
+    отправляются фоновым воркером через SMTP выбранного корпоративного ящика."""
+    __tablename__ = "mail_queue"
+    id              = Column(Integer, primary_key=True, index=True)
+    campaign_id     = Column(String, index=True, nullable=False)   # группировка писем одной рассылки
+    campaign_name   = Column(String, nullable=True)
+    email_account_id = Column(Integer, ForeignKey("email_accounts.id"), nullable=False)
+    lead_id         = Column(Integer, ForeignKey("leads.id"), nullable=True)
+    to_email        = Column(String, nullable=False)
+    to_name         = Column(String, nullable=True)
+    subject         = Column(String, nullable=False)
+    body            = Column(Text, nullable=False)
+    status          = Column(String, default="pending")   # pending / sent / failed
+    attempts        = Column(Integer, default=0)
+    error           = Column(Text, nullable=True)
+    created_at      = Column(DateTime, default=datetime.utcnow)
+    sent_at         = Column(DateTime, nullable=True)
 
 # ─────────── DB INIT ───────────
 
@@ -511,6 +536,12 @@ def _start_email_poll_thread():
         print(f"[email-idle] ошибка при старте: {e}")
     print("[email-idle] IMAP IDLE запущен (push-режим)")
 
+@app.on_event("startup")
+def _start_mail_sender_thread():
+    t = threading.Thread(target=_mail_sender_worker, daemon=True, name="mail-sender")
+    t.start()
+    print("[mail-sender] воркер отправки рассылки запущен")
+
 # ─────────── SCHEMAS ───────────
 
 class Lead(BaseModel):
@@ -657,6 +688,15 @@ class EmailAccountUpdate(BaseModel):
     pipeline_id:   Optional[int] = None
     client_type:   Optional[str] = None
     active:        Optional[bool] = None
+
+class MailingCreate(BaseModel):
+    email_account_id: int
+    subject: str
+    body: str                       # поддерживает {{name}} — подставится имя клиента
+    lead_ids: Optional[List[int]] = None   # явный список лидов
+    pipeline_id: Optional[int] = None      # либо все лиды из воронки с заполненным email
+    tag_id: Optional[int] = None           # либо все лиды с тегом и заполненным email
+    campaign_name: Optional[str] = None
 
 def _clean(v):
     if v is None: return None
@@ -1154,6 +1194,67 @@ def _email_account_to_dict(a: "EmailAccountDB"):
         "leads_created": a.leads_created or 0,
         "baseline_done": a.last_uid is not None,
     }
+
+# ─────────── ВНУТРЕННЯЯ РАССЫЛКА (SMTP) ───────────
+
+MAIL_SEND_INTERVAL = float(os.getenv("MAIL_SEND_INTERVAL_SECONDS", "2"))   # пауза между письмами, антиспам-троттлинг
+MAIL_MAX_ATTEMPTS   = int(os.getenv("MAIL_MAX_ATTEMPTS", "3"))
+
+def _render_template(text: str, name: str) -> str:
+    return (text or "").replace("{{name}}", name or "").replace("{{имя}}", name or "")
+
+def _send_smtp_mail(account: "EmailAccountDB", to_email: str, subject: str, body: str):
+    """Отправляет одно письмо через SMTP-настройки корпоративного ящика (те же,
+    что используются для IMAP-приёма — секция «Почта» в Интеграциях)."""
+    if not account.smtp_host or not account.password:
+        raise RuntimeError("Не настроен SMTP-хост или пароль для этого ящика")
+    msg = MIMEMultipart("alternative")
+    msg["Subject"] = subject
+    msg["From"] = account.email
+    msg["To"] = to_email
+    msg.attach(MIMEText(body, "plain", "utf-8"))
+    port = account.smtp_port or (465 if account.smtp_ssl else 587)
+    if account.smtp_ssl:
+        with smtplib.SMTP_SSL(account.smtp_host, port, timeout=15) as s:
+            s.login(account.email, account.password)
+            s.sendmail(account.email, [to_email], msg.as_string())
+    else:
+        with smtplib.SMTP(account.smtp_host, port, timeout=15) as s:
+            s.starttls()
+            s.login(account.email, account.password)
+            s.sendmail(account.email, [to_email], msg.as_string())
+
+def _mail_sender_worker():
+    """Фоновый воркер: раз в MAIL_SEND_INTERVAL секунд забирает одно письмо
+    со статусом pending из очереди и отправляет его. Троттлинг — по одному
+    письму за тик, чтобы не словить блокировку от почтового провайдера."""
+    while True:
+        try:
+            with SessionLocal() as db:
+                item = (db.query(MailQueueDB)
+                          .filter(MailQueueDB.status == "pending")
+                          .order_by(MailQueueDB.id.asc())
+                          .first())
+                if item:
+                    account = db.query(EmailAccountDB).filter(EmailAccountDB.id == item.email_account_id).first()
+                    item.attempts = (item.attempts or 0) + 1
+                    try:
+                        if not account:
+                            raise RuntimeError("Почтовый ящик отправителя удалён")
+                        _send_smtp_mail(account, item.to_email, item.subject, item.body)
+                        item.status = "sent"
+                        item.sent_at = datetime.utcnow()
+                        item.error = None
+                    except Exception as e:
+                        item.error = str(e)
+                        if item.attempts >= MAIL_MAX_ATTEMPTS:
+                            item.status = "failed"
+                        else:
+                            item.status = "pending"   # попробуем ещё раз на следующем тике
+                    db.commit()
+        except Exception as e:
+            print(f"[mail-sender] ошибка воркера: {e}")
+        time.sleep(MAIL_SEND_INTERVAL)
 
 def _lead_to_dict(lead: LeadDB, db: Session):
     tags = db.query(TagDB).join(LeadTagDB, LeadTagDB.tag_id == TagDB.tag_id).filter(LeadTagDB.lead_id == lead.id).all()
@@ -1913,6 +2014,234 @@ def poll_email_account_now(account_id: int, db: Session = Depends(get_db)):
     created = _poll_email_account(account_id)
     db.refresh(a)
     return {"message": f"Проверено. Новых лидов: {created}", "created": created, "data": _email_account_to_dict(a)}
+
+# ─────────── ИМПОРТ ЛИДОВ ИЗ EXCEL ───────────
+
+IMPORT_HEADER_MAP = {
+    "имя": "name", "фио": "name", "название": "name", "наименование": "name",
+    "имя клиента": "name", "клиент": "name", "name": "name",
+    "телефон": "phone", "номер телефона": "phone", "номер": "phone", "phone": "phone", "тел": "phone",
+    "email": "email", "почта": "email", "e-mail": "email", "электронная почта": "email",
+    "компания": "company_name", "company": "company_name", "организация": "company_name",
+    "источник": "source", "source": "source",
+    "комментарий": "comment", "примечание": "comment",
+}
+
+def _norm_phone(raw) -> Optional[str]:
+    if raw is None:
+        return None
+    s = re.sub(r"[^\d+]", "", str(raw).strip())
+    if not s:
+        return None
+    if s.startswith("8") and len(s) == 11:
+        s = "+7" + s[1:]
+    elif s.startswith("7") and len(s) == 11:
+        s = "+" + s
+    elif not s.startswith("+"):
+        s = "+" + s
+    return s
+
+def _norm_email(raw) -> Optional[str]:
+    if raw is None:
+        return None
+    s = str(raw).strip()
+    if not s or "@" not in s:
+        return None
+    return s
+
+@app.get("/leads/import/template")
+def download_import_template():
+    """Отдаёт xlsx-шаблон с нужными колонками для импорта."""
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "Лиды"
+    ws.append(["Имя", "Телефон", "Email", "Компания", "Источник", "Комментарий"])
+    ws.append(["Иван Иванов", "+79991234567", "ivan@example.com", "ООО «Ромашка»", "Импорт", ""])
+    buf = io.BytesIO()
+    wb.save(buf)
+    buf.seek(0)
+    return Response(
+        content=buf.getvalue(),
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": 'attachment; filename="leads_import_template.xlsx"'},
+    )
+
+@app.post("/leads/import")
+async def import_leads(
+    file: UploadFile = File(...),
+    pipeline_id: int = Form(1),
+    client_type: str = Form("физ"),
+    manager_id: Optional[int] = Form(None),
+    source: Optional[str] = Form("Импорт из Excel"),
+    db: Session = Depends(get_db),
+):
+    if not file.filename.lower().endswith((".xlsx", ".xlsm")):
+        return JSONResponse(status_code=400, content={"error": "Поддерживаются только файлы .xlsx"})
+
+    pipeline = db.query(PipelineDB).filter(PipelineDB.pipeline_id == pipeline_id).first()
+    if not pipeline:
+        return JSONResponse(status_code=400, content={"error": f"Воронка с id {pipeline_id} не найдена"})
+    default_status = pipeline.stages.split("|")[0]
+
+    raw = await file.read()
+    try:
+        wb = openpyxl.load_workbook(io.BytesIO(raw), data_only=True)
+    except Exception as e:
+        return JSONResponse(status_code=400, content={"error": f"Не удалось прочитать файл: {e}"})
+    ws = wb.active
+
+    rows = list(ws.iter_rows(values_only=True))
+    if not rows:
+        return {"created": 0, "skipped": 0, "errors": ["Файл пуст"]}
+
+    header = [str(h).strip().lower() if h else "" for h in rows[0]]
+    col_map = {}   # индекс колонки -> поле лида
+    for idx, h in enumerate(header):
+        field = IMPORT_HEADER_MAP.get(h)
+        if field:
+            col_map[idx] = field
+
+    if "phone" not in col_map.values():
+        return JSONResponse(status_code=400, content={
+            "error": "Не найдена колонка с телефоном. Ожидаются заголовки вида «Имя», «Телефон», «Email» "
+                     "(см. /leads/import/template)."
+        })
+
+    created, skipped, errors = 0, 0, []
+    seen_phones_in_file = set()
+
+    for row_num, row in enumerate(rows[1:], start=2):
+        data = {}
+        for idx, field in col_map.items():
+            if idx < len(row):
+                data[field] = row[idx]
+
+        phone = _norm_phone(data.get("phone"))
+        if not phone:
+            skipped += 1
+            errors.append(f"Строка {row_num}: не указан или некорректен телефон")
+            continue
+        if phone in seen_phones_in_file:
+            skipped += 1
+            errors.append(f"Строка {row_num}: дубликат телефона {phone} внутри файла")
+            continue
+        seen_phones_in_file.add(phone)
+
+        if db.query(LeadDB).filter(LeadDB.phone == phone).first():
+            skipped += 1
+            errors.append(f"Строка {row_num}: лид с телефоном {phone} уже есть в CRM")
+            continue
+
+        name = _clean(data.get("name")) or phone
+        email_val = _norm_email(data.get("email"))
+
+        db_lead = LeadDB(
+            name=name, phone=phone, status=default_status,
+            email=email_val, pipeline_id=pipeline_id, manager_id=manager_id,
+            client_type=client_type,
+            source=_clean(data.get("source")) or source,
+            company_name=_clean(data.get("company_name")),
+            comment=_clean(data.get("comment")),
+        )
+        db.add(db_lead)
+        db.flush()
+        _log_activity(db, phone, "lead_created", {"name": name, "source": "import"}, manager_id)
+        created += 1
+
+    db.commit()
+    return {
+        "message": f"Импорт завершён: создано {created}, пропущено {skipped}",
+        "created": created, "skipped": skipped,
+        "errors": errors[:200],   # не заваливаем ответ, если строк с ошибками очень много
+    }
+
+# ─────────── ВНУТРЕННЯЯ РАССЫЛКА ───────────
+
+@app.get("/mail-accounts")
+def list_mail_accounts(db: Session = Depends(get_db)):
+    """Ящики, у которых заполнен SMTP (пригодны как отправитель рассылки)."""
+    accounts = db.query(EmailAccountDB).filter(EmailAccountDB.smtp_host.isnot(None)).all()
+    return [_email_account_to_dict(a) for a in accounts if a.password]
+
+@app.post("/mailings")
+def create_mailing(payload: MailingCreate, db: Session = Depends(get_db)):
+    account = db.query(EmailAccountDB).filter(EmailAccountDB.id == payload.email_account_id).first()
+    if not account:
+        return JSONResponse(status_code=400, content={"error": "Ящик-отправитель не найден"})
+    if not account.smtp_host or not account.password:
+        return JSONResponse(status_code=400, content={"error": "У выбранного ящика не настроен SMTP или не указан пароль"})
+
+    q = db.query(LeadDB).filter(LeadDB.email.isnot(None), LeadDB.email != "")
+    if payload.lead_ids:
+        q = q.filter(LeadDB.id.in_(payload.lead_ids))
+    else:
+        if payload.pipeline_id:
+            q = q.filter(LeadDB.pipeline_id == payload.pipeline_id)
+        if payload.tag_id:
+            q = q.join(LeadTagDB, LeadTagDB.lead_id == LeadDB.id).filter(LeadTagDB.tag_id == payload.tag_id)
+    leads = q.all()
+
+    if not leads:
+        return JSONResponse(status_code=400, content={"error": "Не найдено ни одного лида с заполненным email по заданным условиям"})
+
+    campaign_id = uuid.uuid4().hex[:12]
+    queued = 0
+    for lead in leads:
+        db.add(MailQueueDB(
+            campaign_id=campaign_id,
+            campaign_name=_clean(payload.campaign_name) or payload.subject,
+            email_account_id=account.id,
+            lead_id=lead.id,
+            to_email=lead.email,
+            to_name=lead.name,
+            subject=_render_template(payload.subject, lead.name),
+            body=_render_template(payload.body, lead.name),
+            status="pending",
+        ))
+        queued += 1
+    db.commit()
+    return {"message": f"Рассылка поставлена в очередь: {queued} писем", "campaign_id": campaign_id, "queued": queued}
+
+@app.get("/mailings")
+def list_mailings(db: Session = Depends(get_db)):
+    """Список рассылок (кампаний) со сводной статистикой по статусам."""
+    rows = db.query(
+        MailQueueDB.campaign_id, MailQueueDB.campaign_name,
+        func.min(MailQueueDB.created_at).label("created_at"),
+        func.count(MailQueueDB.id).label("total"),
+        func.sum(case((MailQueueDB.status == "sent", 1), else_=0)).label("sent"),
+        func.sum(case((MailQueueDB.status == "failed", 1), else_=0)).label("failed"),
+        func.sum(case((MailQueueDB.status == "pending", 1), else_=0)).label("pending"),
+    ).group_by(MailQueueDB.campaign_id).order_by(func.min(MailQueueDB.created_at).desc()).all()
+    return [
+        {
+            "campaign_id": r.campaign_id, "campaign_name": r.campaign_name,
+            "created_at": r.created_at.isoformat() if r.created_at else None,
+            "total": r.total, "sent": r.sent or 0, "failed": r.failed or 0, "pending": r.pending or 0,
+        } for r in rows
+    ]
+
+@app.get("/mailings/{campaign_id}")
+def mailing_detail(campaign_id: str, db: Session = Depends(get_db)):
+    items = db.query(MailQueueDB).filter(MailQueueDB.campaign_id == campaign_id).order_by(MailQueueDB.id).all()
+    if not items:
+        return JSONResponse(status_code=404, content={"error": "Рассылка не найдена"})
+    return [
+        {
+            "id": i.id, "to_email": i.to_email, "to_name": i.to_name,
+            "status": i.status, "attempts": i.attempts, "error": i.error,
+            "sent_at": i.sent_at.isoformat() if i.sent_at else None,
+        } for i in items
+    ]
+
+@app.delete("/mailings/{campaign_id}")
+def cancel_mailing(campaign_id: str, db: Session = Depends(get_db)):
+    """Отменяет ещё не отправленные письма кампании (уже отправленные не трогает)."""
+    n = db.query(MailQueueDB).filter(
+        MailQueueDB.campaign_id == campaign_id, MailQueueDB.status == "pending"
+    ).update({"status": "failed", "error": "Отменено пользователем"})
+    db.commit()
+    return {"message": f"Отменено писем: {n}"}
 
 # ─────────── EXPORT ───────────
 

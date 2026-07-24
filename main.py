@@ -917,6 +917,23 @@ def _imap_connect(acc: "EmailAccountDB"):
     conn.login(acc.email, acc.password or "")
     return conn
 
+# Отправители, письма от которых НЕ должны становиться заявками (лидами).
+# Сюда попадают служебные/рекламные уведомления, а не реальные обращения клиентов.
+# Проверка идёт по вхождению подстроки в адрес отправителя (регистр не важен).
+IGNORED_SENDER_PATTERNS = [
+    "hoster.by",         # уведомления хостинг-провайдера (тех. письма, счета и т.п.)
+    "yandex-direct",     # Яндекс.Директ
+    "yandex.direct",     # на случай другого написания домена/адреса
+    "direct@yandex",     # рассылки/уведомления Яндекс.Директа
+]
+
+def _is_ignored_sender(from_addr: str) -> bool:
+    """True, если письмо пришло от адреса из игнор-листа (см. IGNORED_SENDER_PATTERNS)."""
+    if not from_addr:
+        return False
+    addr = from_addr.strip().lower()
+    return any(pattern in addr for pattern in IGNORED_SENDER_PATTERNS)
+
 def _email_account_test(acc: "EmailAccountDB"):
     try:
         conn = _imap_connect(acc)
@@ -967,6 +984,11 @@ def _poll_email_account(account_id: int) -> int:
 
                     # письма от самого ящика (авто-ответы и т.п.) не превращаем в лиды
                     if from_addr and acc.email and from_addr.strip().lower() == acc.email.strip().lower():
+                        max_uid = max(max_uid, uid)
+                        continue
+
+                    # служебные/рекламные письма (hoster.by, yandex.direct и т.п.) — не заявки клиентов
+                    if _is_ignored_sender(from_addr):
                         max_uid = max(max_uid, uid)
                         continue
 
